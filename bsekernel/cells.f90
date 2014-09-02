@@ -9,11 +9,9 @@
 !
 !===============================================================================
 
-#include "f_defs.h"
-
 module cells_m
 
-  use global_m
+  use common_m
   implicit none
 
   private
@@ -57,22 +55,18 @@ contains
     integer :: jdim
     logical :: should_write
 
-    PUSH_SUB(cells_init)
-
     should_write = .true.
     if (present(quiet)) should_write = .not. quiet
 
-#ifdef VERBOSE
-    if (peinf%inode==0.and.should_write) &
+    if (should_write) &
       write(6,'(/,a)') 'Initializing cell structure.'
-#endif
 
     this%periodic = periodic
     this%npts = size(pts, dim=2)
-    SAFE_ALLOCATE(this%pts, (3, this%npts))
+    allocate(this%pts(3, this%npts))
     if (this%periodic) then
       ! FHJ: this is guaranteed to be in [0, 1)
-      this%pts(:,:) = UNIT_RANGE(pts(:,:))
+      this%pts(:,:) = pts(:,:) - floor(pts(:,:))
     else
       this%pts(:,:) = pts(:,:)
     endif
@@ -121,43 +115,35 @@ contains
     this%factor(:) = this%n_cells(:) / (this%dmax(:) - this%dmin(:))
     this%shift(:) = (this%dmax(:) - this%dmin(:)) / (2.0d0*this%n_cells(:))
 
-#ifdef VERBOSE
-    if (peinf%inode==0.and.should_write) then
+    if (should_write) then
       write(6,*)
       write(6,'(a,i6,a)') ' Automatically creating a cell structure for ',this%npts,' points'
       write(6,'(a,i1,a)') '  Found ',this%dims,' dimension(s)'
       write(6,'(a,i5,i5,i5)') '  Number of cells:', this%n_cells(1),this%n_cells(2),this%n_cells(3)
       write(6,'(a,i6)') '  Total number of cells:', this%n_cells(1)*this%n_cells(2)*this%n_cells(3)
     endif
-#endif
 
-    SAFE_ALLOCATE(this%head, (this%n_cells(1),this%n_cells(2),this%n_cells(3)))
-    SAFE_ALLOCATE(this%list, (this%npts))
+    allocate(this%head(this%n_cells(1),this%n_cells(2),this%n_cells(3)))
+    allocate(this%list(this%npts))
 
     ! FHJ: Initialize and populate cells
     this%head(:,:,:) = 0
     this%list(:) = 0
 
-#ifdef VERBOSE
-    if (peinf%inode==0 .and. should_write) then
+    if (should_write) then
       write(6,*)
       do jdim=1,3
         write(6,801) jdim,this%dmin(jdim),this%dmax(jdim),this%shift(jdim)*2.0d0
 801     format(' Cells [',i1,'], dmin= ',f8.5,' dmax= ',f8.5,' length= ',f12.5)
       enddo
     endif
-#endif
 
     call cells_populate(this)
 
-#ifdef VERBOSE
-    if (peinf%inode==0 .and. should_write) then
+    if (should_write) then
       call cells_show_population(this)
       write(6,'(/,a)') 'Finished initializing cells'
     endif
-#endif
-
-    POP_SUB(cells_init)
 
   end subroutine cells_init
 
@@ -170,13 +156,11 @@ contains
     integer :: idx_co
     integer :: cell_idx(3)
 
-    PUSH_SUB(cells_populate)
     do idx_co=1,this%npts
       call cells_get_cell_idx(this, this%pts(:,idx_co), cell_idx)
       this%list(idx_co) = this%head(cell_idx(1),cell_idx(2),cell_idx(3))
       this%head(cell_idx(1),cell_idx(2),cell_idx(3)) = idx_co
     enddo
-    POP_SUB(cells_populate)
 
   end subroutine cells_populate
 
@@ -211,7 +195,7 @@ contains
 
     ! no push/pop, called too frequently
     pt(:) = pt_in(:)
-    if (this%periodic) pt(:) = UNIT_RANGE(pt(:))
+    if (this%periodic) pt(:) = pt(:) - floor(pt(:))
 
     ! See if the point is in this central cell. The subroutine should
     ! usually return here
@@ -232,12 +216,10 @@ contains
           cell_idx(3) = j3
           call find_exactly_in_cell(cell_idx, idx_found)
           if (idx_found/=0) then
-            if (peinf%inode==0) then
-              write(0,'(a)') &
-                'WARNING: find_exactly: point was not located in central cell.'
-              write(0,'(a)') &
-                'The cell structure is non-optimal.'
-            endif
+            write(0,'(a)') &
+              'WARNING: find_exactly: point was not located in central cell.'
+            write(0,'(a)') &
+              'The cell structure is non-optimal.'
             return
           endif
         enddo
@@ -257,7 +239,7 @@ contains
       idx_pt = this%head(c_idx(1), c_idx(2), c_idx(3))
       do while (idx_pt/=0)
         delta(:) = this%pts(:, idx_pt) - pt(:)
-        if (this%periodic) delta(:) = MIN_RANGE(delta(:))
+        if (this%periodic) delta(:) = delta(:) - floor(delta(:) + 0.5d0)
         if (all(dabs(delta)<TOL_SMALL)) then
           i_found = idx_pt
           return
@@ -321,7 +303,6 @@ contains
 
     integer :: j1, j2, j3, idx_co, iunit
 
-    PUSH_SUB(cells_show_population)
     iunit = 6
     if (present(iunit_)) iunit = iunit_
     write(iunit,*)
@@ -344,7 +325,6 @@ contains
       enddo
     enddo
     write(iunit,*)
-    POP_SUB(cells_show_population)
 
   end subroutine cells_show_population
 
@@ -352,11 +332,9 @@ contains
   subroutine cells_free(this)
     type(cells_t), intent(inout) :: this
 
-    PUSH_SUB(cells_free)
-    SAFE_DEALLOCATE_P(this%head)
-    SAFE_DEALLOCATE_P(this%list)
-    SAFE_DEALLOCATE_P(this%pts)
-    POP_SUB(cells_free)
+    deallocate(this%head)
+    deallocate(this%list)
+    deallocate(this%pts)
 
   end subroutine cells_free
 
