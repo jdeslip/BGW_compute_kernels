@@ -12,21 +12,16 @@ module intkernel_m
 
 contains
 
-subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,intp_coefs,eps_co)
+subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   type (crystal), intent(in) :: crys
   type (grid), intent(in) :: kg
-  type (kpoints), intent(in) :: kp
-  type (symmetry), intent(in) :: syms
   type (xctinfo), intent(inout) :: xct
   complex(DPC), intent(inout) :: hmtrx(:,:) !< (xct%nkpt_fi*xct%ncb_fi*xct%nvb_fi*xct%nspin,peinf%nblocks*peinf%nblockd)
   !> (xct%nvb_fi,xct%n1b_co,xct%nspin,xct%nkpt_fi,xct%npts_intp_kernel) Band expansion coefficients
   complex(DPC), intent(in) :: dcc(:,:,:,:,:), dvv(:,:,:,:,:)
-  real(DP), intent(in) :: kco(:,:) !< (3,xct%nkpt_co)
   !> (xct%npts_intp_kernel, xct%nkpt_fi) For a given k-point in the fine grid
   !! returns the closest k-point in the coarse WFN k-grid.
   integer, intent(in) :: fi2co_wfn(:,:)
-  type(flags), intent(in) :: flag
-  type (gspace), intent(in) :: gvec
   !> (xct%npts_intp_kernel, xct%nkpt_fi) Delaunay/greedy interpolation coefficients
   real(DP), intent(in) :: intp_coefs(:,:)
   real(DP), intent(in) :: eps_co(:)
@@ -48,12 +43,12 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   integer, allocatable :: vq_map(:)
   integer :: ik_cells, jkp_offset
   integer :: isrtrq(1), closepts(4)
-
+  integer, allocatable :: ikb(:)
   
-  integer :: iscreentemp,iparallel,ijk,icb,ivb,imatrix, &
+  integer :: iscreentemp,ijk,icb,ivb,imatrix, &
     ik,ic,iv,ikp,icp,ivp,ikt,ikcvs,ikcvsd,jj,jc,jv,js, &
     jcp,jvp,jsp,jk,jkp,dimbse,nmatrices,ifile, &
-    i1,i2,i3,iold,icout,ivout,ncdim,nvdim,inew,tda_sz
+    iold,icout,ivout,ncdim,nvdim,inew,ibt
   !> (xct%nkpt_co) maps a k-point in the WFN_co to the bse*mat files.
   integer, allocatable :: wfn2bse(:)
   !> (xct%npts_intp_kernel, xct%nkpt_fi) For a given k-point in the fine grid,
@@ -61,7 +56,7 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   integer, allocatable :: fi2co_bse(:,:)
   integer :: ivertp, ivert
   integer, allocatable :: jkp2offset(:)
-  real(DP) :: bsemat_fac,fac_d,fac_x,w_eff,eps,tol,factor,fac_t
+  real(DP) :: bsemat_fac,fac_d,fac_x,w_eff,eps,tol,factor
 
 !------------------------------
 ! kernel and transformation matrices
@@ -70,11 +65,14 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
     bsedmatrix_loc(:,:,:,:,:,:,:), &
     dcckp(:,:,:), dvvkp(:,:,:)
 
+  allocate(ikb(xct%nkpt_fi))
+  ikb = (/ (ik, ik=1,xct%nkpt_fi) /)
+  ibt = xct%nkpt_fi
   allocate(wfn2bse(xct%nkpt_co))
   allocate(fi2co_bse(xct%npts_intp_kernel, xct%nkpt_fi))
 
   tol=TOL_Small
-  factor = -8.d0*PI_D/(crys%celvol*xct%nktotal)*xct%scaling
+  factor = -8.d0*PI_D/(crys%celvol*xct%nktotal)
   
 !-----------------------------------------------------------------------------!
 !              EPSILON INTERPOLATION AND V(Q) PRE-CALCULATION
@@ -101,17 +99,9 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   ! FHJ: This block is equivalent to dqs(:,ik) = UNIT_RANGE(kg%f(:,ik)-kg%f(:,1))
   ! if nkpt_fi==nktotal, but only up to TOL_SMALL. In order for the testsuite not to
   ! fail, we explicitly break this into standard and patched_sampling cases.
-  ik=0
-  do i1=0,kp%kgrid(1)-1
-    do i2=0,kp%kgrid(2)-1
-      do i3=0,kp%kgrid(3)-1
-        ik=ik+1
-        ! FHJ: This is already in the [0,1) range
-        dqs(1,ik)=(dble(i1))/dble(kp%kgrid(1))
-        dqs(2,ik)=(dble(i2))/dble(kp%kgrid(2))
-        dqs(3,ik)=(dble(i3))/dble(kp%kgrid(3))
-      enddo
-    enddo
+  do ik = 1, xct%nkpt_fi 
+    dqs(:,ik) = kg%f(:,ik) - kg%f(:,1)
+    dqs(:,ik) = dqs(:,ik) - floor(dqs(:,ik))
   enddo
 
   ! FHJ: TODO: parallelize this loop (trivial)
@@ -149,7 +139,6 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   call timacc(55,1)
   write(6,'(/,1x,a,i6,a)') 'Calculating v(q) with ',xct%nktotal ,' k-points'
   iscreentemp = 0
-  iparallel = 1
   inew = 0
 
   do ik = 1, xct%nktotal
@@ -202,14 +191,13 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
     write(6,'(/,1x,a)') 'Building Interaction Kernel'
   endif
 
-  tda_sz = 1
-  if (xct%ipar .eq. 1) then
-    allocate(bsedmt(xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,xct%ncb_fi,xct%nspin,xct%nspin,tda_sz))
-  else if (xct%ipar .eq. 2) then
-    allocate(bsedmt(xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,1,xct%nspin,xct%nspin,tda_sz))
-  else
-    allocate(bsedmt(xct%nvb_fi,xct%ncb_fi,1,1,xct%nspin,xct%nspin,tda_sz))
-  endif
+!  if (xct%ipar .eq. 1) then
+    allocate(bsedmt(xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,xct%ncb_fi,xct%nspin,xct%nspin,1))
+!  else if (xct%ipar .eq. 2) then
+!    allocate(bsedmt(xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,1,xct%nspin,xct%nspin,1))
+!  else
+!    allocate(bsedmt(xct%nvb_fi,xct%ncb_fi,1,1,xct%nspin,xct%nspin,1))
+!  endif
   allocate(dcckp(xct%n2b_co,xct%ncb_fi,xct%nspin))
   allocate(dvvkp(xct%n1b_co,xct%nvb_fi,xct%nspin))
  
@@ -232,7 +220,7 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   ! FHJ: this is to generate nice output / time estimate
   ! MJ: This is true irrespective of BSE/TDDFT
   nmatrices = 4
-  write(6,'(a,i0,a)') 'Interpolating BSE kernel with ', maxval(peinf%ibt(:))*nmatrices, ' blocks'
+  write(6,'(a,i0,a)') 'Interpolating BSE kernel with ', ibt*nmatrices, ' blocks'
 
   ! FHJ: For each PE, figure our which coarse k-points jkp it needs in order to
   ! interpolate the BSE matrix on the fine k-points it owns.
@@ -240,8 +228,8 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   jkp2offset = -1 ! offset=-1 means we don`t need this coarse k-point
   jkp_offset = 0
   do jkp=1,xct%nkpt_co
-    do ikt = 1, peinf%ibt(peinf%inode+1)
-      ikp=peinf%ikb(peinf%inode+1,ikt)
+    do ikt = 1, ibt
+      ikp=ikb(ikt)
       if (any(fi2co_bse(:,ikp)==jkp)) then
         jkp2offset(jkp) = jkp_offset
         jkp_offset = jkp_offset + xct%nkpt_co 
@@ -277,8 +265,8 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
 !      For each fine k-points ik/ikp and expansion vertices ivert/iterp, find
 !      the corresponding coarse-grid points jk/jkp and interpolate the kernel.
 !==============================================================================
-    do ikt = 1, peinf%ibt(peinf%inode+1)
-      ikp = peinf%ikb(peinf%inode+1,ikt)
+    do ikt = 1, ibt
+      ikp = ikb(ikt)
       do ivertp = 1, xct%npts_intp_kernel
         jkp = fi2co_bse(ivertp, ikp)
         jkp_offset = jkp2offset(jkp)
@@ -331,22 +319,22 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
 !-----------------------------
 ! Head (spin diagonal)
 
-                if (xct%ipar .eq. 1) then
+!                if (xct%ipar .eq. 1) then
                   ncdim=xct%ncb_fi
                   nvdim=xct%nvb_fi
                   icout=1
                   ivout=1
-                else if (xct%ipar .eq. 2) then
-                  ncdim=1
-                  nvdim=xct%nvb_fi
-                  icout=peinf%icb(peinf%inode+1,ikt)
-                  ivout=1
-                else if (xct%ipar .eq. 3) then
-                  ncdim=1
-                  nvdim=1
-                  icout=peinf%icb(peinf%inode+1,ikt)
-                  ivout=peinf%ivb(peinf%inode+1,ikt)
-                endif
+!                else if (xct%ipar .eq. 2) then
+!                  ncdim=1
+!                  nvdim=xct%nvb_fi
+!                  icout=peinf%icb(peinf%inode+1,ikt)
+!                  ivout=1
+!                else if (xct%ipar .eq. 3) then
+!                  ncdim=1
+!                  nvdim=1
+!                  icout=peinf%icb(peinf%inode+1,ikt)
+!                  ivout=peinf%ivb(peinf%inode+1,ikt)
+!                endif
                 endif !ivert==1
 
                 call timacc(57,1)
@@ -440,24 +428,24 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
 ! XXX: WHY IS BSE_INDEX FASTER ON THE SPIN INDEX??
 
                 do icp = 1, xct%ncb_fi
-                  if (xct%ipar .eq. 1 .or. icp .eq. 1) then
+!                  if (xct%ipar .eq. 1 .or. icp .eq. 1) then
                     do ivp = 1, xct%nvb_fi
                       if (xct%ipar .lt. 3 .or. ivp .eq. 1) then
                         do jsp = 1, xct%nspin
-                          if (xct%ipar .eq. 1) then 
+!                          if (xct%ipar .eq. 1) then 
                             icb=icp
                             ivb=ivp
                             ikcvsd = bse_index(ikt, icb, ivb, jsp, xct)
-                          else if (xct%ipar .eq. 2) then
-                            !icb=peinf%icb(peinf%inode+1,ikt)
-                            icb=1
-                            ivb=ivp
-                            ikcvsd = bse_index(ikt, icb, ivb, jsp, xct, ncband = 1)
-                          else
-                            icb=1
-                            ivb=1
-                            ikcvsd = bse_index(ikt, icb, ivb, jsp, xct, ncband = 1, nvband = 1)
-                          endif
+!                          else if (xct%ipar .eq. 2) then
+!                            !icb=peinf%icb(peinf%inode+1,ikt)
+!                            icb=1
+!                            ivb=ivp
+!                            ikcvsd = bse_index(ikt, icb, ivb, jsp, xct, ncband = 1)
+!                          else
+!                            icb=1
+!                            ivb=1
+!                            ikcvsd = bse_index(ikt, icb, ivb, jsp, xct, ncband = 1, nvband = 1)
+!                          endif
 
                           do ic = 1, xct%ncb_fi
                             do iv = 1, xct%nvb_fi
@@ -471,7 +459,7 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
                         enddo              ! jsp
                       endif
                     enddo              ! ivp
-                  endif
+!                  endif
                 enddo              ! icp
                 call timacc(58,2)
               enddo ! ivert / jk
@@ -505,27 +493,28 @@ end subroutine intkernel
 
 !=======================================================================================
 
-subroutine interpolate(xct,nvdim,ncdim,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,ivin,icin,imatrix,flag)
+!subroutine interpolate(xct,nvdim,ncdim,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,ivin,icin,imatrix,flag)
+subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,imatrix,flag)
   type (xctinfo), intent(inout) :: xct
      ! xct should not be changed but ifort 12.0.0 -O3 compiles
      ! incorrectly if it is intent(in)
-  integer, intent(in) :: nvdim,ncdim
   complex(DPC), intent(in) :: bse_co(:,:,:,:,:,:) !< (xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin)
   complex(DPC), intent(out) :: bse_fi(:,:,:,:,:,:) !< (xct%nvb_fi,xct%ncb_fi,nvdim,ncdim,xct%nspin,xct%nspin)
   complex(DPC), intent(in) :: dcck(:,:,:)  !< (xct%ncb_fi,xct%n2b_co,xct%nspin)
   complex(DPC), intent(in) :: dcckp(:,:,:) !< (xct%n2b_co,xct%ncb_fi,xct%nspin)
   complex(DPC), intent(in) :: dvvk(:,:,:)  !< (xct%nvb_fi,xct%n1b_co,xct%nspin)
   complex(DPC), intent(in) :: dvvkp(:,:,:) !< (xct%n1b_co,xct%nvb_fi,xct%nspin)
-  integer, intent(in) :: ivin, icin, imatrix, flag
+  integer, intent(in) :: imatrix, flag
+!  integer, intent(in) :: nvdim, ncdim, ivin, icin
 
-  integer :: js,jsp,iv,ivp,jc,jcp,icb,ivb,jv,jvp,ic,icp, &
+  integer :: js,jsp,iv,ivp,jc,jcp,&
     js_dvvk, js_dvvkp, js_dcck, js_dcckp, bse_co_js, bse_co_jsp
+!  integer :: icb, ivb, ic, icp, jv, jvp
   
   complex(DPC), allocatable :: mat_vcvc(:,:,:,:),mat_vfvc(:,:,:,:), &
     mat_vfvf(:,:,:,:),mat_cccc(:,:,:,:), &
-    mat_cfcc(:,:,:,:),mat_cfcf(:,:,:,:), &
-    dummy(:,:,:,:),dummyp(:,:,:,:), &
-    dummy2(:,:,:,:),dummy3(:,:,:,:), dvvkn(:,:)
+    mat_cfcc(:,:,:,:),mat_cfcf(:,:,:,:)
+!  complex(DPC), allocatable :: dummy(:,:,:,:), dummyp(:,:,:,:), dummy2(:,:,:,:), dummy3(:,:,:,:), dvvkn(:,:)
   
   bse_fi=0.0
   
@@ -566,104 +555,104 @@ subroutine interpolate(xct,nvdim,ncdim,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,ivin,
 
 ! Reorder matrix
 
-      if (xct%ipar .eq. 4) then
-
-! Best on memory and fast if ncdim and nvdim are 1
-
-        do icp=1,ncdim
-          icb = icin
-          do ivp=1,nvdim
-            ivb = ivin
-            do ic=1,xct%ncb_fi
-              do iv=1,xct%nvb_fi
-                do jcp=1,xct%n2b_co
-                  do jvp=1,xct%n1b_co
-                    do jc=1,xct%n2b_co
-                      do jv=1,xct%n1b_co
-                        bse_fi(iv,ic,ivp,icp,js,jsp) = bse_fi(iv,ic,ivp,icp,js,jsp) + &
-                          bse_co(jv,jc,jvp,jcp,bse_co_js,bse_co_jsp) * dvvk(iv,jv,js_dvvk) &
-                          * conjg(dvvkp(jvp,ivb,js_dvvkp)) * &
-                          conjg(dcck(ic,jc,js_dcck)) * dcckp(jcp,icb,js_dcckp)
-                      enddo
-                    enddo
-                  enddo
-                enddo
-              enddo
-            enddo
-          enddo
-        enddo
-        
-      else if (xct%ipar .ge. 2) then
-
-! Faster and better on memory when nvdim is not 1
-
-        allocate(dummy(xct%n1b_co,xct%ncb_fi,xct%n1b_co,ncdim))
-        dummy = 0.0
-              
-        do icp=1,ncdim
-          icb = icin
-          do jcp=1,xct%n2b_co
-            do jvp=1,xct%n1b_co
-              call zgemm('n','c',xct%n1b_co,xct%ncb_fi,xct%n2b_co, &
-                dcckp(jcp,icb,js_dcckp),bse_co(:,:,jvp,jcp,bse_co_js,bse_co_jsp), &
-                xct%n1b_co,dcck(:,:,js_dcck),xct%ncb_fi,(1d0,0d0),dummy(:,:,jvp,icp),xct%n1b_co)
-            enddo
-          enddo
-        enddo
-        
-        allocate(dummyp(xct%n1b_co,xct%n1b_co,xct%ncb_fi,ncdim))
-        allocate(dummy2(xct%n1b_co,xct%ncb_fi,nvdim,ncdim))
-        allocate(dummy3(xct%n1b_co,nvdim,xct%ncb_fi,ncdim))
-        allocate(dvvkn(xct%n1b_co,nvdim))
-        dummy3 = 0.0
-        dummy2 = 0.0
-        
-        do icp = 1, ncdim
-          do ic = 1, xct%ncb_fi
-            do jvp = 1, xct%n1b_co
-              dummyp(:,jvp,ic,icp) = dummy(:,ic,jvp,icp)
-            enddo
-          enddo
-        enddo
-        
-        if (xct%ipar .eq. 2) then
-          do ivp = 1,nvdim
-            dvvkn(:,ivp) = conjg(dvvkp(:,ivp,js_dvvkp))
-          enddo
-        else
-          dvvkn(:,1) = conjg(dvvkp(:,ivin,js_dvvkp))
-        endif
-        
-        do icp=1,ncdim
-          icb = icin
-          do ic=1,xct%ncb_fi
-            call zgemm('n','n',xct%n1b_co,nvdim,xct%n1b_co, &
-              (1d0,0d0),dummyp(1,1,ic,icp),xct%n1b_co,dvvkn(1,1),xct%n1b_co,(1d0,0d0),dummy3(1,1,ic,icp),xct%n1b_co)
-          enddo
-        enddo
-        
-        do icp = 1, ncdim
-          do ic = 1, xct%ncb_fi
-            dummy2(:,ic,:,icp) = dummy3(:,:,ic,icp)
-          enddo
-        enddo
-        
-        deallocate(dummy)
-        deallocate(dummyp)
-        deallocate(dummy3)
-        deallocate(dvvkn)
-        
-        do icp=1,ncdim
-          icb = icin
-          do ivp=1,nvdim
-            call zgemm('n','n',xct%nvb_fi,xct%ncb_fi,xct%n1b_co,(1d0,0d0),dvvk(:,:,js_dvvk),xct%nvb_fi, &
-              dummy2(:,:,ivp,icp),xct%n1b_co,(1d0,0d0),bse_fi(:,:,ivp,icp,js,jsp),xct%nvb_fi)
-          enddo
-        enddo
-        
-        deallocate(dummy2)
-              
-      else if (xct%ipar .eq. 1) then
+!      if (xct%ipar .eq. 4) then
+!
+!! Best on memory and fast if ncdim and nvdim are 1
+!
+!        do icp=1,ncdim
+!          icb = icin
+!          do ivp=1,nvdim
+!            ivb = ivin
+!            do ic=1,xct%ncb_fi
+!              do iv=1,xct%nvb_fi
+!                do jcp=1,xct%n2b_co
+!                  do jvp=1,xct%n1b_co
+!                    do jc=1,xct%n2b_co
+!                      do jv=1,xct%n1b_co
+!                        bse_fi(iv,ic,ivp,icp,js,jsp) = bse_fi(iv,ic,ivp,icp,js,jsp) + &
+!                          bse_co(jv,jc,jvp,jcp,bse_co_js,bse_co_jsp) * dvvk(iv,jv,js_dvvk) &
+!                          * conjg(dvvkp(jvp,ivb,js_dvvkp)) * &
+!                          conjg(dcck(ic,jc,js_dcck)) * dcckp(jcp,icb,js_dcckp)
+!                      enddo
+!                    enddo
+!                  enddo
+!                enddo
+!              enddo
+!            enddo
+!          enddo
+!        enddo
+!        
+!      else if (xct%ipar .ge. 2) then
+!
+!! Faster and better on memory when nvdim is not 1
+!
+!        allocate(dummy(xct%n1b_co,xct%ncb_fi,xct%n1b_co,ncdim))
+!        dummy = 0.0
+!              
+!        do icp=1,ncdim
+!          icb = icin
+!          do jcp=1,xct%n2b_co
+!            do jvp=1,xct%n1b_co
+!              call zgemm('n','c',xct%n1b_co,xct%ncb_fi,xct%n2b_co, &
+!                dcckp(jcp,icb,js_dcckp),bse_co(:,:,jvp,jcp,bse_co_js,bse_co_jsp), &
+!                xct%n1b_co,dcck(:,:,js_dcck),xct%ncb_fi,(1d0,0d0),dummy(:,:,jvp,icp),xct%n1b_co)
+!            enddo
+!          enddo
+!        enddo
+!        
+!        allocate(dummyp(xct%n1b_co,xct%n1b_co,xct%ncb_fi,ncdim))
+!        allocate(dummy2(xct%n1b_co,xct%ncb_fi,nvdim,ncdim))
+!        allocate(dummy3(xct%n1b_co,nvdim,xct%ncb_fi,ncdim))
+!        allocate(dvvkn(xct%n1b_co,nvdim))
+!        dummy3 = 0.0
+!        dummy2 = 0.0
+!        
+!        do icp = 1, ncdim
+!          do ic = 1, xct%ncb_fi
+!            do jvp = 1, xct%n1b_co
+!              dummyp(:,jvp,ic,icp) = dummy(:,ic,jvp,icp)
+!            enddo
+!          enddo
+!        enddo
+!        
+!        if (xct%ipar .eq. 2) then
+!          do ivp = 1,nvdim
+!            dvvkn(:,ivp) = conjg(dvvkp(:,ivp,js_dvvkp))
+!          enddo
+!        else
+!          dvvkn(:,1) = conjg(dvvkp(:,ivin,js_dvvkp))
+!        endif
+!        
+!        do icp=1,ncdim
+!          icb = icin
+!          do ic=1,xct%ncb_fi
+!            call zgemm('n','n',xct%n1b_co,nvdim,xct%n1b_co, &
+!              (1d0,0d0),dummyp(1,1,ic,icp),xct%n1b_co,dvvkn(1,1),xct%n1b_co,(1d0,0d0),dummy3(1,1,ic,icp),xct%n1b_co)
+!          enddo
+!        enddo
+!        
+!        do icp = 1, ncdim
+!          do ic = 1, xct%ncb_fi
+!            dummy2(:,ic,:,icp) = dummy3(:,:,ic,icp)
+!          enddo
+!        enddo
+!        
+!        deallocate(dummy)
+!        deallocate(dummyp)
+!        deallocate(dummy3)
+!        deallocate(dvvkn)
+!        
+!        do icp=1,ncdim
+!          icb = icin
+!          do ivp=1,nvdim
+!            call zgemm('n','n',xct%nvb_fi,xct%ncb_fi,xct%n1b_co,(1d0,0d0),dvvk(:,:,js_dvvk),xct%nvb_fi, &
+!              dummy2(:,:,ivp,icp),xct%n1b_co,(1d0,0d0),bse_fi(:,:,ivp,icp,js,jsp),xct%nvb_fi)
+!          enddo
+!        enddo
+!        
+!        deallocate(dummy2)
+!              
+!      else if (xct%ipar .eq. 1) then
 
 ! Fastest but worst on memory
 
@@ -748,7 +737,7 @@ subroutine interpolate(xct,nvdim,ncdim,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,ivin,
 
         deallocate(mat_cfcf)
 
-      endif
+!      endif
     enddo
   enddo
 
