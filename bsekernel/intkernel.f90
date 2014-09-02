@@ -3,6 +3,7 @@ module intkernel_m
   use common_m
   use blas_m
   use cells_m
+  use timing_m
 
   implicit none
 
@@ -103,7 +104,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   enddo
 
   ! FHJ: TODO: parallelize this loop (trivial)
-  !call timacc(54,1)
+  call timacc(54,1)
   call cells_init(cells_fi, dqs, periodic=.true., quiet=.true.)
   do ik = 1, xct%nktotal
     dq(:) = dqs(:, ik)
@@ -116,7 +117,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   ! Interpolate epsinv - Just the head
     eps_intp(ik) = exp(-abs_q2*1d-2)
   enddo !ik
-  !call timacc(54,2)
+  call timacc(54,2)
 ! FHJ: Done with epsinv interpolation
 !-----------------------------------
 
@@ -124,7 +125,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 !-------------------------------
 ! We should all contribute to calculating vcoul0 since it might involve minibz average
 
-  !call timacc(55,1)
+  call timacc(55,1)
   inew = 0
 
   do ik = 1, xct%nktotal
@@ -157,19 +158,18 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 
 ! FHJ: Done with v(q) pre-calculation
 !-----------------------------------
-  write(6,'(a)')
   write(6,'(1x,a,i6,a)') 'Finished calculating Vcoul with ',inew,' unique points'
 
-  !call timacc(55,2)
-  !call timacc(51,1)
+  call timacc(55,2)
+  call timacc(51,1)
 
 !--------------------------------
 ! Allocate data
 
   if (.not. xct%skipinterp) then
-    write(6,'(/,1x,a)') 'Performing Kernel Interpolation'
+    write(6,'(1x,a)') 'Performing Kernel Interpolation'
   else
-    write(6,'(/,1x,a)') 'Building Interaction Kernel'
+    write(6,'(1x,a)') 'Building Interaction Kernel'
   endif
 
 !  if (xct%ipar .eq. 1) then
@@ -184,15 +184,15 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
  
   dimbse=xct%nkpt_co*(xct%n2b_co*xct%n1b_co*xct%nspin)**2
 
-  !call timacc(51,2)
-  !call timacc(52,1)
+  call timacc(51,2)
+  call timacc(52,1)
 
   do ik = 1, xct%nkpt_fi
     fi2co_bse(:,ik) = wfn2bse(fi2co_wfn(:,ik))
   enddo
 
 
-  !call timacc(52,2)
+  call timacc(52,2)
 
 !------------- Read in coarse matrices: head, wings, body, exchange --------------------
   nmatrices = 4
@@ -216,8 +216,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 
           do jj=1, xct%n2b_co * xct%n1b_co
             ! FHJ: we would normally be reading a file here..
-            jvp = (jj-1)/xct%n1b_co + 1
-            jcp = mod(jj-1, xct%n1b_co) + 1
+            jvp = mod(jj-1, xct%n1b_co) + 1
+            jcp = (jj-1)/xct%n1b_co + 1
             ikp = jkp
             do jk = 1, xct%nkpt_co
               do jc = 1, xct%n2b_co
@@ -269,7 +269,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
                 ! FHJ: and now we can reuse all the information from the cell
                 ! structure to get the mapping to the BZ, v(q) and the interpolated
                 ! epsilon in O(1) operations.
-                !call timacc(56,1)
+                call timacc(56,1)
                 call cells_find_exactly(cells_fi, dq, ik_cells)
                 if (ik_cells==0) then
                   write(0,'(a)') 'Found a point that was not calculated before:'
@@ -286,7 +286,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
                 ! The 1/(8*pi) is already included
                 vcoul = vcoul_array(iold)
                 oneoverq = oneoverq_array(iold)
-                !call timacc(56,2)
+                call timacc(56,2)
                 
                 w_eff = vcoul * eps
                 if (abs_q2<TOL_Zero) then
@@ -316,7 +316,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 !                endif
                 endif !ivert==1
 
-                !call timacc(57,1)
+                call timacc(57,1)
 
                 !write(6,*) bsedmatrix_loc(1,1,1,1,1,1,jkp_offset+1)
                 if (.not. xct%skipinterp) then
@@ -342,7 +342,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
                     enddo
                 endif
 
-                !call timacc(57,2)
+                call timacc(57,2)
 
 !------------------------------
 ! Add interaction kernel to the Hamiltonian
@@ -361,7 +361,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
                 bsemat_fac = bsemat_fac * intp_coefs(ivert, ik) * intp_coefs(ivertp, ikp)
 
                 if(abs(bsemat_fac) < TOL_Zero) cycle
-                !call timacc(58,1)
+                call timacc(58,1)
 
 ! JRD: When comparing these loops with the loops in diag.f90 notice that:
 ! iv -> ivp
@@ -409,7 +409,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
                     enddo              ! ivp
 !                  endif
                 enddo              ! icp
-                !call timacc(58,2)
+                call timacc(58,2)
               enddo ! ivert / jk
             enddo ! ik
       enddo ! ivertp / jkp
