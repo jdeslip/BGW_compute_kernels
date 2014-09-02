@@ -2,13 +2,7 @@ module intkernel_m
 
   use common_m
   use blas_m
-  use epsdiag_m
-  use intpts_m
-  use interp_m
-  use misc_m
   use cells_m
-  use wfn_rho_vxc_io_m
-  use kernel_io_m
 
   implicit none
 
@@ -18,7 +12,7 @@ module intkernel_m
 
 contains
 
-subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,intp_coefs,hmtrx_B)
+subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,intp_coefs,eps_co)
   type (crystal), intent(in) :: crys
   type (grid), intent(in) :: kg
   type (kpoints), intent(in) :: kp
@@ -35,16 +29,15 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   type (gspace), intent(in) :: gvec
   !> (xct%npts_intp_kernel, xct%nkpt_fi) Delaunay/greedy interpolation coefficients
   real(DP), intent(in) :: intp_coefs(:,:)
-  complex(DPC), intent(inout), optional :: hmtrx_B(:,:)
+  real(DP), intent(in) :: eps_co(:)
 
   real(DP) :: vcoul, oneoverq
   real(DP) :: vcoul0(1), closeweights(4), q0temp(3)
-  complex(DPC)   :: epshead_temp
-  type (epsinfo) :: epsi
 
 ! FHJ: these arrays depend only on the distance w.r.t qq=0 (inside the BZ)
   real(DP), allocatable :: dist_array(:) !length of dq for a given index
   real(DP), allocatable :: vcoul_array(:), oneoverq_array(:)
+  real(DP) :: q0vec(3) = (/1d-6, 0d0, 0d0/)
 
   !> FHJ: cells structure that keeps all fine (k-kp) transitions
   type(cells_t) :: cells_fi
@@ -54,9 +47,8 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   real(DP), allocatable :: dqs(:,:), dqs_bz(:,:), abs_qs2(:), eps_intp(:)
   integer, allocatable :: vq_map(:)
   integer :: ik_cells, jkp_offset
-
   integer :: isrtrq(1), closepts(4)
-  type(interp_t) :: eps_interp
+
   
   integer :: iscreentemp,iparallel,ijk,icb,ivb,imatrix, &
     ik,ic,iv,ikp,icp,ivp,ikt,ikcvs,ikcvsd,jj,jc,jv,js, &
@@ -69,64 +61,20 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   integer, allocatable :: fi2co_bse(:,:)
   integer :: ivertp, ivert
   integer, allocatable :: jkp2offset(:)
-
   real(DP) :: bsemat_fac,fac_d,fac_x,w_eff,eps,tol,factor,fac_t
-  type(progress_info) :: prog_info
-  type(kernel_header_t) :: kernel_header, kernel_header2, kernel_header3
 
 !------------------------------
 ! kernel and transformation matrices
-
   complex(DPC), allocatable :: &
     bsedmatrix(:,:,:,:,:,:,:),bsedmt(:,:,:,:,:,:,:), &
     bsedmatrix_loc(:,:,:,:,:,:,:), &
     dcckp(:,:,:), dvvkp(:,:,:)
-
-  if(abs(xct%scaling) < TOL_Zero) return ! everything will be zero
-
-  if (.not.xct%tda.and..not.present(hmtrx_B)) &
-    call die('Doing non-TDA but array hmtrx_B not present.', only_root_writes=.true.)
-
-!---------------------------------
-! Read head of dielectric function from file (either 'epsdiag.dat' or
-! 'eps0mat'/'epsmat')
-
-  call logit('Calling epsdiag')
-
-  call timacc(7,1)
-  if(peinf%inode==0) then
-    if(flag%read_epsdiag) then
-      call read_epsdiag(epsi)
-  endif
-  call timacc(7,2)
-
-  call timacc(8,1)
-  call timacc(8,2)
 
   allocate(wfn2bse(xct%nkpt_co))
   allocate(fi2co_bse(xct%npts_intp_kernel, xct%nkpt_fi))
 
   tol=TOL_Small
   factor = -8.d0*PI_D/(crys%celvol*xct%nktotal)*xct%scaling
-  if (flag%krnl.eq.0) then
-    if(peinf%inode.eq.0) write(6,'(a)') 'Spin Triplet Kernel'
-    fac_d = factor
-    fac_x = 0d0
-    fac_t = factor
-  elseif (flag%krnl.eq.1) then
-    if(peinf%inode.eq.0) write(6,'(a)') 'Spin Singlet Kernel'
-    fac_d = factor
-    fac_x = factor
-    fac_t = factor
-  elseif (flag%krnl.eq.2) then
-    if(peinf%inode.eq.0) write(6,'(a)') 'Local Fields'
-    fac_d = 0d0
-    fac_x = factor
-    fac_t = 0d0
-  else
-    write(0,*) 'kernel type = ', flag%krnl
-    call die("Illegal value of kernel type in intkernel.")
-  endif
   
 !-----------------------------------------------------------------------------!
 !              EPSILON INTERPOLATION AND V(Q) PRE-CALCULATION
@@ -176,52 +124,33 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
     call point_to_bz(crys, dq, dq_bz, abs_q2)
     dqs_bz(:, ik) = dq_bz(:)
     abs_qs2(ik) = abs_q2
-    if (abs_q2 > epsi%emax) write(0,*) ' WARNING: emax too small, ', abs_q2, epsi%emax
 
   ! Interpolate epsinv - Just the head
     if (xct%icutv/=0 .and. xct%iscreen==0 .and. abs_q2<TOL_Zero) then
-    ! SIB:  if q=0 and we are truncating the coulomb interaction, then
-    !       the dielectric is 1 at q=0 for semiconductors.
       eps = 1.0d0
     else
-      if (xct%delaunay_interp) then
-        call interp_eval(eps_interp, dq_bz, closepts(:), closeweights(:))
-      else
-        call intpts_local(crys, dq_bz, epsi%nq, epsi%q(:,:), xct, closepts(:), &
-          closeweights(:), periodic=.false.)
-      endif
+      closeweights(:) = 0d0
+      closeweights(1) = 1d0
       eps=0D0
       do ijk = 1, xct%idimensions + 1
-        eps = eps + closeweights(ijk)*epsi%eps(closepts(ijk)) 
+        eps = eps + closeweights(ijk)*eps_co(closepts(ijk))
       enddo
     endif
     eps_intp(ik) = eps
   enddo !ik
-  if (xct%delaunay_interp) then
-    call interp_free(eps_interp)
-  else
-    call dealloc_intpts()
-  endif
   call timacc(54,2)
 ! FHJ: Done with epsinv interpolation
 !-----------------------------------
-
-  deallocate(epsi%q)
-  deallocate(epsi%eps)
 
 ! FHJ: v(q) pre-calculation
 !-------------------------------
 ! We should all contribute to calculating vcoul0 since it might involve minibz average
 
   call timacc(55,1)
-  if (peinf%inode .eq. 0) then
-    write(6,'(/,1x,a,i6,a)') 'Calculating v(q) with ',xct%nktotal ,' k-points'
-  endif
+  write(6,'(/,1x,a,i6,a)') 'Calculating v(q) with ',xct%nktotal ,' k-points'
   iscreentemp = 0
   iparallel = 1
   inew = 0
-
-  if(peinf%inode == 0) call checkgriduniformity(kp%kgrid, crys, xct%icutv)
 
   do ik = 1, xct%nktotal
     dq(:) = dqs(:, ik)
@@ -244,11 +173,10 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
       dist_array(inew)=abs_q2
       vcoul0(1)=0.0d0
       isrtrq(1) = 1
-      q0temp(:) = epsi%q0vec(:)
-      epshead_temp = epsi%epshead
+      q0temp(:) = q0vec(:)
 
-      vcoul0(1) = Pi_D/abs_q2(iq)
-      oneoverq = 1d0/sqrt(abs_q2(iq)
+      vcoul0(1) = Pi_D/abs_q2
+      oneoverq = 1d0/sqrt(abs_q2)
       vcoul_array(inew) = vcoul0(1)/(8.0*Pi_D)
       oneoverq_array(inew) = oneoverq/(8.0*Pi_D)
       vq_map(ik) = inew
@@ -259,11 +187,8 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
 
 ! FHJ: Done with v(q) pre-calculation
 !-----------------------------------
-
-  if (peinf%inode .eq. 0) then
-    write(6,'(a)')
-    write(6,'(1x,a,i6,a)') 'Finished calculating Vcoul with ',inew,' unique points'
-  endif
+  write(6,'(a)')
+  write(6,'(1x,a,i6,a)') 'Finished calculating Vcoul with ',inew,' unique points'
 
   call timacc(55,2)
   call timacc(51,1)
@@ -271,15 +196,12 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
 !--------------------------------
 ! Allocate data
 
-  if (peinf%inode .eq. 0) then
-    if (.not. xct%skipinterp) then
-      write(6,'(/,1x,a)') 'Performing Kernel Interpolation'
-    else
-      write(6,'(/,1x,a)') 'Building Interaction Kernel'
-    endif
+  if (.not. xct%skipinterp) then
+    write(6,'(/,1x,a)') 'Performing Kernel Interpolation'
+  else
+    write(6,'(/,1x,a)') 'Building Interaction Kernel'
   endif
 
-!  if(peinf%inode.eq.0) write(6,'(a)') 'Data allocation: intkernel'
   tda_sz = 1
   if (xct%ipar .eq. 1) then
     allocate(bsedmt(xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,xct%ncb_fi,xct%nspin,xct%nspin,tda_sz))
@@ -297,33 +219,7 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
   call timacc(51,2)
   call timacc(52,1)
 
-  if(.not. xct%use_hdf5) then
-    if (peinf%inode==0) then
-      call open_file(unit=11,file='bsedmat',form='unformatted',status='old')
-      call open_file(unit=12,file='bsexmat',form='unformatted',status='old')
-    endif
-    call read_binary_kernel_header(11, kernel_header)
-    call require_version('bsedmat', kernel_header%mf%version, VER_BSE_FORT)
-    call check_xctinfo_kernel_header('bsedmat', xct, kernel_header)
-    call read_binary_kernel_header(12, kernel_header2)
-    call require_version('bsexmat', kernel_header2%mf%version, VER_BSE_FORT)
-    call check_xctinfo_kernel_header('bsexmat', xct, kernel_header2)
-
-    if (.not.all(abs(kernel_header%kpt(:,:)-kernel_header2%kpt(:,:))<tol)) then
-      call die('k-grids from bsedmat and bsexmat don`t match.', &
-        only_root_writes=.true.)
-    endif
-
-    call read_binary_kernel_header(13, kernel_header3)
-    call require_version('bsetmat', kernel_header3%mf%version, VER_BSE_FORT)
-    call check_xctinfo_kernel_header('bsetmat', xct, kernel_header3)
-    if (.not.all(abs(kernel_header%kpt(:,:)-kernel_header3%kpt(:,:))<tol)) then
-      call die('k-grids from bsedmat and bsexmat don`t match.', &
-        only_root_writes=.true.)
-    endif
-
-  endif
-
+  ! FIXME - mapping
   do ik = 1, xct%nkpt_fi
     fi2co_bse(:,ik) = wfn2bse(fi2co_wfn(:,ik))
   enddo
@@ -332,16 +228,10 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
 
 !------------- Read in coarse matrices: head, wings, body, exchange --------------------
 ! PE # 0 reads and broadcasts to everybody
-  if (peinf%inode.eq.0) write(6,'(a)') ' Read in coarse matrices: head, wings, body, exchange '
+  write(6,'(a)') ' Read in coarse matrices: head, wings, body, exchange '
   ! FHJ: this is to generate nice output / time estimate
   ! MJ: This is true irrespective of BSE/TDDFT
-  if (flag%krnl==0) then ! triplet (only W)
-    nmatrices = 3
-  elseif (flag%krnl==2) then ! local fields (only V)
-    nmatrices = 1
-  else ! singlet (W + V)
-    nmatrices = 4
-  endif
+  nmatrices = 4
   write(6,'(a,i0,a)') 'Interpolating BSE kernel with ', maxval(peinf%ibt(:))*nmatrices, ' blocks'
 
   ! FHJ: For each PE, figure our which coarse k-points jkp it needs in order to
@@ -418,7 +308,7 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
                   write(0,'(a)') 'Found a point that was not calculated before:'
                   write(0,'(3(f13.9,1x))') dq
                   write(0,'(a)') 'Are you using a non-uniform grid?'
-                  call die('Found a point that was not calculated before.')
+                  stop
                 endif
                 abs_q2 = abs_qs2(ik_cells)
                 eps = eps_intp(ik_cells)
@@ -465,7 +355,7 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
                   call interpolate(xct, nvdim, ncdim, &
                     bsedmatrix_loc(:,:,:,:,:,:,jkp_offset+jk), bsedmt(:,:,:,:,:,:,1), &
                     dcc(:,:,:,ik,ivert), dcckp, dvv(:,:,:,ik,ivert), dvvkp, &
-                    ivout, icout, imatrix, flag%krnl)
+                    ivout, icout, imatrix, 1)
                 else
 ! XXX Thread?
                   if (.not.xct%extended_kernel) then
