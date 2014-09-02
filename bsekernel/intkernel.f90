@@ -176,44 +176,38 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
     call point_to_bz(crys, dq, dq_bz, abs_q2)
     dqs_bz(:, ik) = dq_bz(:)
     abs_qs2(ik) = abs_q2
-    if (xct%theory .eq. 0) then
-      if (abs_q2 > epsi%emax) write(0,*) ' WARNING: emax too small, ', abs_q2, epsi%emax
+    if (abs_q2 > epsi%emax) write(0,*) ' WARNING: emax too small, ', abs_q2, epsi%emax
 
-    ! Interpolate epsinv - Just the head
-      if (xct%icutv/=0 .and. xct%iscreen==0 .and. abs_q2<TOL_Zero) then
-      ! SIB:  if q=0 and we are truncating the coulomb interaction, then
-      !       the dielectric is 1 at q=0 for semiconductors.
-        eps = 1.0d0
-      else
-        if (xct%delaunay_interp) then
-          call interp_eval(eps_interp, dq_bz, closepts(:), closeweights(:))
-        else
-          call intpts_local(crys, dq_bz, epsi%nq, epsi%q(:,:), xct, closepts(:), &
-            closeweights(:), periodic=.false.)
-        endif
-        eps=0D0
-        do ijk = 1, xct%idimensions + 1
-          eps = eps + closeweights(ijk)*epsi%eps(closepts(ijk)) 
-        enddo
-      endif
-      eps_intp(ik) = eps
-    endif ! theory=0
-  enddo !ik
-  if (xct%theory .eq. 0) then
-    if (xct%delaunay_interp) then
-      call interp_free(eps_interp)
+  ! Interpolate epsinv - Just the head
+    if (xct%icutv/=0 .and. xct%iscreen==0 .and. abs_q2<TOL_Zero) then
+    ! SIB:  if q=0 and we are truncating the coulomb interaction, then
+    !       the dielectric is 1 at q=0 for semiconductors.
+      eps = 1.0d0
     else
-      call dealloc_intpts()
+      if (xct%delaunay_interp) then
+        call interp_eval(eps_interp, dq_bz, closepts(:), closeweights(:))
+      else
+        call intpts_local(crys, dq_bz, epsi%nq, epsi%q(:,:), xct, closepts(:), &
+          closeweights(:), periodic=.false.)
+      endif
+      eps=0D0
+      do ijk = 1, xct%idimensions + 1
+        eps = eps + closeweights(ijk)*epsi%eps(closepts(ijk)) 
+      enddo
     endif
-  endif ! theory=0
+    eps_intp(ik) = eps
+  enddo !ik
+  if (xct%delaunay_interp) then
+    call interp_free(eps_interp)
+  else
+    call dealloc_intpts()
+  endif
   call timacc(54,2)
 ! FHJ: Done with epsinv interpolation
 !-----------------------------------
 
-  if (xct%theory .eq. 0) then
-    deallocate_P(epsi%q)
-    deallocate_P(epsi%eps)
-  endif
+  deallocate(epsi%q)
+  deallocate(epsi%eps)
 
 ! FHJ: v(q) pre-calculation
 !-------------------------------
@@ -518,46 +512,25 @@ subroutine intkernel(crys,kg,kp,syms,xct,hmtrx,dcc,dvv,kco,fi2co_wfn,flag,gvec,i
                 if (imatrix .eq. 1) then
                   if (xct%iscreen .eq. 0) then
                     ! change back
-                    if (xct%theory==0) then
-                      bsemat_fac = fac_d * w_eff
-                    else
-                      bsemat_fac = fac_d * xct%short_range_frac_fock * w_eff
-                    endif
+                    bsemat_fac = fac_d * w_eff
                   elseif (xct%iscreen .eq. 1) then
-                    if (xct%icutv .eq. 0 .and. xct%theory .eq. 0) then
+                    if (xct%icutv .eq. 0) then
                       bsemat_fac = fac_d * oneoverq
-                    else
-                      bsemat_fac = fac_d * w_eff
                     endif
                   else
                     bsemat_fac = fac_d
                   endif
                 else if (imatrix .eq. 2) then
-                  if (xct%iscreen .eq. 0 .and. xct%icutv .eq. 0 .and. xct%theory .eq. 0) then
+                  if (xct%iscreen .eq. 0 .and. xct%icutv .eq. 0) then
                     bsemat_fac = fac_d * oneoverq
-                  elseif (xct%theory .eq. 0) then
-                    bsemat_fac = fac_d
                   else
-                    bsemat_fac = fac_d * xct%short_range_frac_fock
+                    bsemat_fac = fac_d
                   endif
                 else if (imatrix .eq. 3) then
-                  if (xct%theory .eq. 0) then
-                    bsemat_fac = fac_d
-                  else
-                    ! This matrix is exchange
-                    bsemat_fac = -fac_x
-                    if (xct%nspin .eq. 1) bsemat_fac = bsemat_fac * 2D0
-                  endif
+                  bsemat_fac = fac_d
                 else if (imatrix .eq. 4) then
-                  if (xct%theory .eq. 0) then
-                    bsemat_fac = -fac_x
-                    if (xct%nspin .eq. 1) bsemat_fac = bsemat_fac * 2D0
-                  else
-                    ! change back
-                    ! This is the fxc matrix
-                    bsemat_fac = -fac_t * ( 1.0d0 - xct%short_range_frac_fock)
-                    if (xct%nspin .eq. 1) bsemat_fac = bsemat_fac * 2D0
-                  endif
+                  bsemat_fac = -fac_x
+                  if (xct%nspin .eq. 1) bsemat_fac = bsemat_fac * 2D0
                 endif
                 bsemat_fac = bsemat_fac * intp_coefs(ivert, ik) * intp_coefs(ivertp, ikp)
 
@@ -669,71 +642,37 @@ subroutine interpolate(xct,nvdim,ncdim,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,ivin,
   do js=1,xct%nspin
     do jsp=1,xct%nspin
       
-      if (xct%theory .eq. 0) then
-        if (xct%nspin .eq. 1) then
-          js_dcck=1
-          js_dcckp=1
-          js_dvvk=1
-          js_dvvkp=1
-          bse_co_js=1
-          bse_co_jsp=1
-        elseif (flag .eq. 0 .and. imatrix .ne. 4 .and. js .eq. jsp ) then
-          js_dcck=js
-          js_dcckp=js
-          bse_co_js=js
-          if (js .eq. 1) then
-            js_dvvk=js+1
-            js_dvvkp=js+1   
-            bse_co_jsp=js+1
-          else             
-            js_dvvk=js-1
-            js_dvvkp=js-1                    
-            bse_co_jsp=js-1
-          end if
-        else if((flag == 1 .and. imatrix /= 4 .and. js == jsp) .or. &
-                (flag == 1 .and. imatrix == 4) .or. (flag == 2 .and. imatrix == 4)) then
-          js_dcck=js
-          js_dcckp=jsp
-          js_dvvk=js
-          js_dvvkp=jsp
-          bse_co_js=js
-          bse_co_jsp=jsp
-        else
-          cycle
+      if (xct%nspin .eq. 1) then
+        js_dcck=1
+        js_dcckp=1
+        js_dvvk=1
+        js_dvvkp=1
+        bse_co_js=1
+        bse_co_jsp=1
+      elseif (flag .eq. 0 .and. imatrix .ne. 4 .and. js .eq. jsp ) then
+        js_dcck=js
+        js_dcckp=js
+        bse_co_js=js
+        if (js .eq. 1) then
+          js_dvvk=js+1
+          js_dvvkp=js+1   
+          bse_co_jsp=js+1
+        else             
+          js_dvvk=js-1
+          js_dvvkp=js-1                    
+          bse_co_jsp=js-1
         end if
-      else ! theory = 2
-        if (xct%nspin .eq. 1) then
-          js_dcck=1
-          js_dcckp=1
-          js_dvvk=1
-          js_dvvkp=1
-          bse_co_js=1
-          bse_co_jsp=1
-        elseif (flag .eq. 0 .and. imatrix .ge. 3 .and. js .eq. jsp ) then
-          js_dcck=js
-          js_dcckp=js
-          bse_co_js=js
-          if (js .eq. 1) then
-            js_dvvk=js+1
-            js_dvvkp=js+1   
-            bse_co_jsp=js+1
-          else             
-            js_dvvk=js-1
-            js_dvvkp=js-1                    
-            bse_co_jsp=js-1
-          end if
-        else if((flag == 1 .and. imatrix .le. 2 .and. js == jsp) .or. &
-                (flag == 1 .and. imatrix .ge. 3) .or. (flag == 2 .and. imatrix .ge. 3)) then
-          js_dcck=js
-          js_dcckp=jsp
-          js_dvvk=js
-          js_dvvkp=jsp
-          bse_co_js=js
-          bse_co_jsp=jsp
-        else
-          cycle
-        end if
-      endif
+      else if((flag == 1 .and. imatrix /= 4 .and. js == jsp) .or. &
+              (flag == 1 .and. imatrix == 4) .or. (flag == 2 .and. imatrix == 4)) then
+        js_dcck=js
+        js_dcckp=jsp
+        js_dvvk=js
+        js_dvvkp=jsp
+        bse_co_js=js
+        bse_co_jsp=jsp
+      else
+        cycle
+      end if
 
 ! Reorder matrix
 
