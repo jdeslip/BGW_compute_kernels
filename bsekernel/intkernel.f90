@@ -340,10 +340,9 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
                 call timacc(57,1)
 
                 if (.not. xct%skipinterp) then
-                  call interpolate(xct, nvdim, ncdim, &
+                  call interpolate(xct, &
                     bsedmatrix_loc(:,:,:,:,:,:,jkp_offset+jk), bsedmt(:,:,:,:,:,:,1), &
-                    dcc(:,:,:,ik,ivert), dcckp, dvv(:,:,:,ik,ivert), dvvkp, &
-                    ivout, icout, imatrix, 1)
+                    dcc(:,:,:,ik,ivert), dcckp, dvv(:,:,:,ik,ivert), dvvkp)
                 else
 ! XXX Thread?
                   if (.not.xct%extended_kernel) then
@@ -493,8 +492,7 @@ end subroutine intkernel
 
 !=======================================================================================
 
-!subroutine interpolate(xct,nvdim,ncdim,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,ivin,icin,imatrix,flag)
-subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,imatrix,flag)
+subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
   type (xctinfo), intent(inout) :: xct
      ! xct should not be changed but ifort 12.0.0 -O3 compiles
      ! incorrectly if it is intent(in)
@@ -504,12 +502,9 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,imatrix,flag)
   complex(DPC), intent(in) :: dcckp(:,:,:) !< (xct%n2b_co,xct%ncb_fi,xct%nspin)
   complex(DPC), intent(in) :: dvvk(:,:,:)  !< (xct%nvb_fi,xct%n1b_co,xct%nspin)
   complex(DPC), intent(in) :: dvvkp(:,:,:) !< (xct%n1b_co,xct%nvb_fi,xct%nspin)
-  integer, intent(in) :: imatrix, flag
-!  integer, intent(in) :: nvdim, ncdim, ivin, icin
 
   integer :: js,jsp,iv,ivp,jc,jcp,&
     js_dvvk, js_dvvkp, js_dcck, js_dcckp, bse_co_js, bse_co_jsp
-!  integer :: icb, ivb, ic, icp, jv, jvp
   
   complex(DPC), allocatable :: mat_vcvc(:,:,:,:),mat_vfvc(:,:,:,:), &
     mat_vfvf(:,:,:,:),mat_cccc(:,:,:,:), &
@@ -528,131 +523,7 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp,imatrix,flag)
         js_dvvkp=1
         bse_co_js=1
         bse_co_jsp=1
-      elseif (flag .eq. 0 .and. imatrix .ne. 4 .and. js .eq. jsp ) then
-        js_dcck=js
-        js_dcckp=js
-        bse_co_js=js
-        if (js .eq. 1) then
-          js_dvvk=js+1
-          js_dvvkp=js+1   
-          bse_co_jsp=js+1
-        else             
-          js_dvvk=js-1
-          js_dvvkp=js-1                    
-          bse_co_jsp=js-1
-        end if
-      else if((flag == 1 .and. imatrix /= 4 .and. js == jsp) .or. &
-              (flag == 1 .and. imatrix == 4) .or. (flag == 2 .and. imatrix == 4)) then
-        js_dcck=js
-        js_dcckp=jsp
-        js_dvvk=js
-        js_dvvkp=jsp
-        bse_co_js=js
-        bse_co_jsp=jsp
-      else
-        cycle
       end if
-
-! Reorder matrix
-
-!      if (xct%ipar .eq. 4) then
-!
-!! Best on memory and fast if ncdim and nvdim are 1
-!
-!        do icp=1,ncdim
-!          icb = icin
-!          do ivp=1,nvdim
-!            ivb = ivin
-!            do ic=1,xct%ncb_fi
-!              do iv=1,xct%nvb_fi
-!                do jcp=1,xct%n2b_co
-!                  do jvp=1,xct%n1b_co
-!                    do jc=1,xct%n2b_co
-!                      do jv=1,xct%n1b_co
-!                        bse_fi(iv,ic,ivp,icp,js,jsp) = bse_fi(iv,ic,ivp,icp,js,jsp) + &
-!                          bse_co(jv,jc,jvp,jcp,bse_co_js,bse_co_jsp) * dvvk(iv,jv,js_dvvk) &
-!                          * conjg(dvvkp(jvp,ivb,js_dvvkp)) * &
-!                          conjg(dcck(ic,jc,js_dcck)) * dcckp(jcp,icb,js_dcckp)
-!                      enddo
-!                    enddo
-!                  enddo
-!                enddo
-!              enddo
-!            enddo
-!          enddo
-!        enddo
-!        
-!      else if (xct%ipar .ge. 2) then
-!
-!! Faster and better on memory when nvdim is not 1
-!
-!        allocate(dummy(xct%n1b_co,xct%ncb_fi,xct%n1b_co,ncdim))
-!        dummy = 0.0
-!              
-!        do icp=1,ncdim
-!          icb = icin
-!          do jcp=1,xct%n2b_co
-!            do jvp=1,xct%n1b_co
-!              call zgemm('n','c',xct%n1b_co,xct%ncb_fi,xct%n2b_co, &
-!                dcckp(jcp,icb,js_dcckp),bse_co(:,:,jvp,jcp,bse_co_js,bse_co_jsp), &
-!                xct%n1b_co,dcck(:,:,js_dcck),xct%ncb_fi,(1d0,0d0),dummy(:,:,jvp,icp),xct%n1b_co)
-!            enddo
-!          enddo
-!        enddo
-!        
-!        allocate(dummyp(xct%n1b_co,xct%n1b_co,xct%ncb_fi,ncdim))
-!        allocate(dummy2(xct%n1b_co,xct%ncb_fi,nvdim,ncdim))
-!        allocate(dummy3(xct%n1b_co,nvdim,xct%ncb_fi,ncdim))
-!        allocate(dvvkn(xct%n1b_co,nvdim))
-!        dummy3 = 0.0
-!        dummy2 = 0.0
-!        
-!        do icp = 1, ncdim
-!          do ic = 1, xct%ncb_fi
-!            do jvp = 1, xct%n1b_co
-!              dummyp(:,jvp,ic,icp) = dummy(:,ic,jvp,icp)
-!            enddo
-!          enddo
-!        enddo
-!        
-!        if (xct%ipar .eq. 2) then
-!          do ivp = 1,nvdim
-!            dvvkn(:,ivp) = conjg(dvvkp(:,ivp,js_dvvkp))
-!          enddo
-!        else
-!          dvvkn(:,1) = conjg(dvvkp(:,ivin,js_dvvkp))
-!        endif
-!        
-!        do icp=1,ncdim
-!          icb = icin
-!          do ic=1,xct%ncb_fi
-!            call zgemm('n','n',xct%n1b_co,nvdim,xct%n1b_co, &
-!              (1d0,0d0),dummyp(1,1,ic,icp),xct%n1b_co,dvvkn(1,1),xct%n1b_co,(1d0,0d0),dummy3(1,1,ic,icp),xct%n1b_co)
-!          enddo
-!        enddo
-!        
-!        do icp = 1, ncdim
-!          do ic = 1, xct%ncb_fi
-!            dummy2(:,ic,:,icp) = dummy3(:,:,ic,icp)
-!          enddo
-!        enddo
-!        
-!        deallocate(dummy)
-!        deallocate(dummyp)
-!        deallocate(dummy3)
-!        deallocate(dvvkn)
-!        
-!        do icp=1,ncdim
-!          icb = icin
-!          do ivp=1,nvdim
-!            call zgemm('n','n',xct%nvb_fi,xct%ncb_fi,xct%n1b_co,(1d0,0d0),dvvk(:,:,js_dvvk),xct%nvb_fi, &
-!              dummy2(:,:,ivp,icp),xct%n1b_co,(1d0,0d0),bse_fi(:,:,ivp,icp,js,jsp),xct%nvb_fi)
-!          enddo
-!        enddo
-!        
-!        deallocate(dummy2)
-!              
-!      else if (xct%ipar .eq. 1) then
 
 ! Fastest but worst on memory
 
