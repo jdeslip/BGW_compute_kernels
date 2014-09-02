@@ -1,8 +1,8 @@
-F90 = ftn
-LINK = ftn
+F90 = ifort -warn all -g -traceback -check all
+LINK = ifort -g -traceback -check all
 LIBS =
 
-kernel_BSE.x: kernel_BSE.o common.o
+kernel_BSE.x: kernel_BSE.o common.o intkernel.o cells.o
 	$(LINK) -o $@ $^ $(LIBS)
 
 kernel_BSE.o: common.o intkernel.o

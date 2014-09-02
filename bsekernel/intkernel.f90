@@ -47,7 +47,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   
   integer :: iscreentemp,ijk,icb,ivb,imatrix, &
     ik,ic,iv,ikp,icp,ivp,ikt,ikcvs,ikcvsd,jj,jc,jv,js, &
-    jcp,jvp,jsp,jk,jkp,dimbse,nmatrices,ifile, &
+    jcp,jvp,jsp,jk,jkp,dimbse,nmatrices, &
     iold,icout,ivout,ncdim,nvdim,inew,ibt
   !> (xct%nkpt_co) maps a k-point in the WFN_co to the bse*mat files.
   integer, allocatable :: wfn2bse(:)
@@ -69,10 +69,13 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   ikb = (/ (ik, ik=1,xct%nkpt_fi) /)
   ibt = xct%nkpt_fi
   allocate(wfn2bse(xct%nkpt_co))
+  wfn2bse = (/ (ik, ik=1,xct%nkpt_co) /)
   allocate(fi2co_bse(xct%npts_intp_kernel, xct%nkpt_fi))
 
   tol=TOL_Small
   factor = -8.d0*PI_D/(crys%celvol*xct%nktotal)
+  fac_d = 1d0
+  fac_x = -1d0
   
 !-----------------------------------------------------------------------------!
 !              EPSILON INTERPOLATION AND V(Q) PRE-CALCULATION
@@ -105,8 +108,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   enddo
 
   ! FHJ: TODO: parallelize this loop (trivial)
-  call timacc(54,1)
-  call cells_init(cells_fi, dqs, periodic=.true.)
+  !call timacc(54,1)
+  call cells_init(cells_fi, dqs, periodic=.true., quiet=.true.)
   do ik = 1, xct%nktotal
     dq(:) = dqs(:, ik)
     
@@ -116,19 +119,20 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
     abs_qs2(ik) = abs_q2
 
   ! Interpolate epsinv - Just the head
-    if (xct%icutv/=0 .and. xct%iscreen==0 .and. abs_q2<TOL_Zero) then
+    if (abs_q2<TOL_Zero) then
       eps = 1.0d0
     else
       closeweights(:) = 0d0
       closeweights(1) = 1d0
       eps=0D0
+      closepts=1
       do ijk = 1, xct%idimensions + 1
         eps = eps + closeweights(ijk)*eps_co(closepts(ijk))
       enddo
     endif
     eps_intp(ik) = eps
   enddo !ik
-  call timacc(54,2)
+  !call timacc(54,2)
 ! FHJ: Done with epsinv interpolation
 !-----------------------------------
 
@@ -136,7 +140,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
 !-------------------------------
 ! We should all contribute to calculating vcoul0 since it might involve minibz average
 
-  call timacc(55,1)
+  !call timacc(55,1)
   write(6,'(/,1x,a,i6,a)') 'Calculating v(q) with ',xct%nktotal ,' k-points'
   iscreentemp = 0
   inew = 0
@@ -164,8 +168,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
       isrtrq(1) = 1
       q0temp(:) = q0vec(:)
 
-      vcoul0(1) = Pi_D/abs_q2
-      oneoverq = 1d0/sqrt(abs_q2)
+      vcoul0(1) = Pi_D/(abs_q2+TOL_SMALL)
+      oneoverq = 1d0/sqrt(abs_q2+TOL_SMALL)
       vcoul_array(inew) = vcoul0(1)/(8.0*Pi_D)
       oneoverq_array(inew) = oneoverq/(8.0*Pi_D)
       vq_map(ik) = inew
@@ -179,8 +183,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   write(6,'(a)')
   write(6,'(1x,a,i6,a)') 'Finished calculating Vcoul with ',inew,' unique points'
 
-  call timacc(55,2)
-  call timacc(51,1)
+  !call timacc(55,2)
+  !call timacc(51,1)
 
 !--------------------------------
 ! Allocate data
@@ -202,17 +206,16 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   allocate(dvvkp(xct%n1b_co,xct%nvb_fi,xct%nspin))
  
   dimbse=xct%nkpt_co*(xct%n2b_co*xct%n1b_co*xct%nspin)**2
-  wfn2bse=0
 
-  call timacc(51,2)
-  call timacc(52,1)
+  !call timacc(51,2)
+  !call timacc(52,1)
 
-  ! FIXME - mapping
   do ik = 1, xct%nkpt_fi
     fi2co_bse(:,ik) = wfn2bse(fi2co_wfn(:,ik))
   enddo
 
-  call timacc(52,2)
+
+  !call timacc(52,2)
 
 !------------- Read in coarse matrices: head, wings, body, exchange --------------------
 ! PE # 0 reads and broadcasts to everybody
@@ -228,14 +231,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   jkp2offset = -1 ! offset=-1 means we don`t need this coarse k-point
   jkp_offset = 0
   do jkp=1,xct%nkpt_co
-    do ikt = 1, ibt
-      ikp=ikb(ikt)
-      if (any(fi2co_bse(:,ikp)==jkp)) then
-        jkp2offset(jkp) = jkp_offset
-        jkp_offset = jkp_offset + xct%nkpt_co 
-        exit
-      endif
-    enddo
+    jkp2offset(jkp) = jkp_offset
+    jkp_offset = jkp_offset + xct%nkpt_co 
   enddo
 
   allocate(bsedmatrix_loc(xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin,jkp_offset))
@@ -244,13 +241,23 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
     allocate(bsedmatrix(xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin,xct%nkpt_co))
     do jkp=1,xct%nkpt_co
 
-      bsedmatrix = 0.0
-        
 ! JRD: READ EVERYTHING FOR A GIVEN K
           do jj=1, xct%n2b_co * xct%n1b_co
-            read(ifile) ikp,jcp,jvp,(((((bsedmatrix(jv,jc,jvp,jcp,js,jsp,jk), &
-              jsp=1,xct%nspin),js=1,xct%nspin),jv=1,xct%n1b_co), &
-              jc=1,xct%n2b_co),jk=1,xct%nkpt_co)
+            ! FHJ: we would be reading a file here..
+            jvp = (jj-1)/xct%n1b_co + 1
+            jcp = mod(jj-1, xct%n1b_co) + 1
+            ikp = jkp
+            do jk = 1, xct%nkpt_co
+              do jc = 1, xct%n2b_co
+                do jv = 1, xct%n1b_co
+                  do js = 1, xct%nspin
+                    do jsp = 1, xct%nspin
+                      bsedmatrix(jv,jc,jvp,jcp,js,jsp,jk) = cmplx( (js+jsp) + 2d0*abs(jv-jvp), 2d0*(jc-jcp) + 16d0*(jkp-jk))
+                    enddo
+                  enddo
+                enddo
+              enddo
+            enddo
           enddo
       
       if (jkp2offset(jkp)/=-1) then
@@ -290,7 +297,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
                 ! FHJ: and now we can reuse all the information from the cell
                 ! structure to get the mapping to the BZ, v(q) and the interpolated
                 ! epsilon in O(1) operations.
-                call timacc(56,1)
+                !call timacc(56,1)
                 call cells_find_exactly(cells_fi, dq, ik_cells)
                 if (ik_cells==0) then
                   write(0,'(a)') 'Found a point that was not calculated before:'
@@ -307,10 +314,10 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
                 ! The 1/(8*pi) is already included
                 vcoul = vcoul_array(iold)
                 oneoverq = oneoverq_array(iold)
-                call timacc(56,2)
+                !call timacc(56,2)
                 
                 w_eff = vcoul * eps
-                if (abs_q2<TOL_Zero .and. xct%iscreen==0) then
+                if (abs_q2<TOL_Zero) then
                   w_eff = xct%wcoul0/(8.0*PI_D)
                 endif
 
@@ -337,15 +344,15 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
 !                endif
                 endif !ivert==1
 
-                call timacc(57,1)
+                !call timacc(57,1)
 
+                !write(6,*) bsedmatrix_loc(1,1,1,1,1,1,jkp_offset+1)
                 if (.not. xct%skipinterp) then
                   call interpolate(xct, &
                     bsedmatrix_loc(:,:,:,:,:,:,jkp_offset+jk), bsedmt(:,:,:,:,:,:,1), &
                     dcc(:,:,:,ik,ivert), dcckp, dvv(:,:,:,ik,ivert), dvvkp)
                 else
 ! XXX Thread?
-                  if (.not.xct%extended_kernel) then
                     do jsp=1,xct%nspin
                       do js=1,xct%nspin
                         do jcp=1,ncdim
@@ -361,48 +368,18 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
                         enddo
                       enddo
                     enddo
-                  else
-                    do jsp=1,xct%nspin
-                      do js=1,xct%nspin
-                        do jcp=1,ncdim
-                          do jvp=1,nvdim
-                            do jc=1,xct%ncb_fi
-                              do jv=1,xct%nvb_fi
-                                ! FHJ: (vc) -> (v`c`)
-                                bsedmt(jv,jc,jvp,jcp,js,jsp,1) = bsedmatrix_loc( &
-                                  jv, xct%nvb_co+jc, jvp+ivout-1, xct%nvb_co+jcp+icout-1, &
-                                  js, jsp, jkp_offset+jk)
-                              enddo
-                            enddo
-                          enddo
-                        enddo
-                      enddo
-                    enddo
-                  endif
                 endif
 
-                call timacc(57,2)
+                !call timacc(57,2)
 
 !------------------------------
 ! Add interaction kernel to the Hamiltonian
 
                 if (imatrix .eq. 1) then
-                  if (xct%iscreen .eq. 0) then
                     ! change back
                     bsemat_fac = fac_d * w_eff
-                  elseif (xct%iscreen .eq. 1) then
-                    if (xct%icutv .eq. 0) then
-                      bsemat_fac = fac_d * oneoverq
-                    endif
-                  else
-                    bsemat_fac = fac_d
-                  endif
                 else if (imatrix .eq. 2) then
-                  if (xct%iscreen .eq. 0 .and. xct%icutv .eq. 0) then
                     bsemat_fac = fac_d * oneoverq
-                  else
-                    bsemat_fac = fac_d
-                  endif
                 else if (imatrix .eq. 3) then
                   bsemat_fac = fac_d
                 else if (imatrix .eq. 4) then
@@ -412,7 +389,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
                 bsemat_fac = bsemat_fac * intp_coefs(ivert, ik) * intp_coefs(ivertp, ikp)
 
                 if(abs(bsemat_fac) < TOL_Zero) cycle
-                call timacc(58,1)
+                !call timacc(58,1)
 
 ! JRD: When comparing these loops with the loops in diag.f90 notice that:
 ! iv -> ivp
@@ -460,7 +437,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
                     enddo              ! ivp
 !                  endif
                 enddo              ! icp
-                call timacc(58,2)
+                !call timacc(58,2)
               enddo ! ivert / jk
             enddo ! ik
       enddo ! ivertp / jkp
