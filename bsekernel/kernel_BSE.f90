@@ -3,15 +3,7 @@
 !                Kernel originally by Felipe H. da Jornada
 !                (jornada@berkeley.edu)
 !
-! Usage:
-! (1) kernel_BSE.x nvb_co ncb_co nkx_co nvb_fi ncb_fi nkx_fi ; or
-! (2) kernel_BSE.x nvb ncb nkx
-!
-! When you run like (1), we`ll perform interpolation. When you run like (3),
-! we`ll skip interpolation.
-!
-! Typical values for nvb/ncb: 2-20
-! Typical values for nkx: 1-10
+! Run ./kernel_BSE.x for the documentation.
 !
 !==============================================================================
 
