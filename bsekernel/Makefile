@@ -1,5 +1,7 @@
-F90 = ifort -warn all -g -traceback -check all -openmp
-LINK = ifort -g -traceback -check all -openmp
+#F90 = ifort -warn all -g -traceback -check all -openmp
+#LINK = ifort -g -traceback -check all -openmp
+F90 = ifort -warn all -fast -no-ip -openmp
+LINK = ifort -fast -no-ip -openmp
 LIBS =
 
 kernel_BSE.x: kernel_BSE.o common.o intkernel.o cells.o timing.o
