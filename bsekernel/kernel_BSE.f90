@@ -38,7 +38,7 @@ program kernel_BSE
   character*16, allocatable :: routnam(:)
   character*16 :: arg
   integer, allocatable :: routsrt(:)
-  real(DP) :: tsec(2),tmin(2),tmax(2)
+  real(DP) :: tsec(2)
   integer :: ncount, narg
   integer :: nthreads, tid, OMP_GET_NUM_THREADS, OMP_GET_THREAD_NUM
 
@@ -49,13 +49,26 @@ program kernel_BSE
   narg = iargc()
   if (narg/=3 .and. narg/=6) then
     write(0,*) 'Usage:'
-    write(0,*) '(1) kernel_BSE.x nvb_co ncb_co nkx_co nvb_fi ncb_fi nkx_fi ; or'
-    write(0,*) '(2) kernel_BSE.x nvb ncb nkx'
+    write(0,*) ' (1) kernel_BSE.x nvb_co ncb_co nkx_co nvb_fi ncb_fi nkx_fi ; or'
+    write(0,*) ' (2) kernel_BSE.x nvb ncb nkx'
+    write(0,*)
+    write(0,*) 'Short examples (<1s):'
+    write(0,*) ' (S1) ./kernel_BSE.x  2 2 2  1 1 4'
+    write(0,*) ' (S2) ./kernel_BSE.x  10 25 2'
+    write(0,*) ' (S3) ./kernel_BSE.x  30 60 1'
+    write(0,*)
+    write(0,*) 'Long examples (<30s):'
+    write(0,*) ' (L1) ./kernel_BSE.x  6 15 2  2 8 4'
+    write(0,*) ' (L2) ./kernel_BSE.x  2 2 3  1 1 7'
+    write(0,*) ' (L3) ./kernel_BSE.x  8 12 5'
+    write(0,*)
+    write(0,*) 'These examples were prioritized, so (S1)/(L1) are more relevant than (S3)/(L3).'
     write(0,*)
     stop
   endif
 
   ! FHJ - Kernel initialization
+  ! ---------------------------------------------------------------------------
 
   xct%skipinterp = .true.
   xct%npts_intp_kernel = 1
@@ -105,13 +118,13 @@ program kernel_BSE
   write(6,666) 'kgrid_fi(1)', kgrid_fi(1)
   write(6,666) 'nkpt_fi', xct%nkpt_fi
   write(6,666) 'nmat', nmat
-!$OMP PARALLEL PRIVATE(NTHREADS, TID)
+!$omp parallel private(tid) shared(nthreads)
   tid = OMP_GET_THREAD_NUM()
   if (tid==0) then
     nthreads = OMP_GET_NUM_THREADS()
     write(6,666) 'Number of threads', nthreads
   endif
-!$OMP END PARALLEL
+!$omp end parallel
   666 format(1x,a,' = ',i0)
   write(6,*)
 
@@ -180,7 +193,9 @@ program kernel_BSE
   enddo
   call timacc(2,2)
 
+
   ! FHJ - This is where we do the actual computation
+  ! ---------------------------------------------------------------------------
 
   write(6,*) 'Calling intkernel'
   call timacc(5,1)
@@ -188,8 +203,11 @@ program kernel_BSE
   call timacc(5,2)
   write(6,*) 'Done!'
 
-  ! FHJ - All done
 
+  ! FHJ - Summarize results
+  ! ---------------------------------------------------------------------------
+
+  call timacc(6,1)
   write(6,*)
   write(6,*) 'Summary of resulting matrix:'
   write(6,*) '----------------------------'
@@ -201,44 +219,38 @@ program kernel_BSE
   tmp = hmtrx(1:2, 1:2)
   write(6,*) tmp
   write(6,*)
+  call timacc(6,2)
+
 
   ! FHJ - Timing
+  ! ---------------------------------------------------------------------------
 
   allocate(routnam(60))
   routnam(1)='TOTAL:'
   routnam(2)='SETUP:'
   routnam(5)='INTKERNEL:'
+  routnam(6)='SUMMARIZE:'
   routnam(51)='IK Setup:'
-  routnam(52)='IK C-Check:'
-  routnam(53)='IK Input:'
-  routnam(54)='IK Inteps:'
-  routnam(55)='IK Vcoul:'
-  routnam(56)='IK Cache:'
+  routnam(56)='IK Cells:'
   routnam(57)='IK Interp:'
   routnam(58)='IK Sum:'
-  allocate(routsrt(11))
-  routsrt=(/ 2, 5, (ii,ii=51,58), 1 /)
+  allocate(routsrt(8))
+  routsrt=(/ 2, 5, 6, 51, 56, 57, 58, 1 /)
 
   call timacc(1,2)
   write(6,*)
-  write(6,9000) 'CPU [s]','WALL [s]','#'
+  write(6,9000) 'CPU (s)','WALL (s)','#'
   write(6,*)
-
   do ii=1,ubound(routsrt, 1)
     call timacc(routsrt(ii),3,tsec,ncount)
-    tmin = tsec
-    tmax = tsec
     if (ii>1) then
-      if (routsrt(ii)-routsrt(ii-1)/=1) write(6,*)
+      if (abs(routsrt(ii)-routsrt(ii-1))>10) write(6,*)
     endif
-    write(6,9001) routnam(routsrt(ii)),tmin(1),tmin(2),ncount
-    write(6,9002) tsec(1),tsec(2)
-    write(6,9003) tmax(1),tmax(2)
+    write(6,9001) routnam(routsrt(ii)),tsec(1)/nthreads,tsec(2),ncount
   enddo
+  write(6,*)
 
 9000 format(22x,a13,  3x,a13,  3x,a8)
-9001 format(1x,a16,'(min.)',f13.3,3x,f13.3,3x,i8)
-9002 format(  17x,'(PE 0)',f13.3,3x,f13.3)
-9003 format(  17x,'(max.)',f13.3,3x,f13.3)
+9001 format(1x,a16,5x,f13.3,3x,f13.3,3x,i8)
 
 end program kernel_BSE

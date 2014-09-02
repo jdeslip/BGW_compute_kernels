@@ -62,6 +62,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
     bsedmatrix_loc(:,:,:,:,:,:,:), &
     dcckp(:,:,:), dvvkp(:,:,:)
 
+  call timacc(51,1)
   allocate(ikb(xct%nkpt_fi))
   ikb = (/ (ik, ik=1,xct%nkpt_fi) /)
   ibt = xct%nkpt_fi
@@ -104,7 +105,6 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   enddo
 
   ! FHJ: TODO: parallelize this loop (trivial)
-  call timacc(54,1)
   call cells_init(cells_fi, dqs, periodic=.true., quiet=.true.)
   do ik = 1, xct%nktotal
     dq(:) = dqs(:, ik)
@@ -117,7 +117,6 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   ! Interpolate epsinv - Just the head
     eps_intp(ik) = exp(-abs_q2*1d-2)
   enddo !ik
-  call timacc(54,2)
 ! FHJ: Done with epsinv interpolation
 !-----------------------------------
 
@@ -125,7 +124,6 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 !-------------------------------
 ! We should all contribute to calculating vcoul0 since it might involve minibz average
 
-  call timacc(55,1)
   inew = 0
 
   do ik = 1, xct%nktotal
@@ -155,13 +153,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
       vq_map(ik) = iold
     endif !iold == 0
   enddo !ik
-
 ! FHJ: Done with v(q) pre-calculation
 !-----------------------------------
-  write(6,'(1x,a,i6,a)') 'Finished calculating Vcoul with ',inew,' unique points'
-
-  call timacc(55,2)
-  call timacc(51,1)
 
 !--------------------------------
 ! Allocate data
@@ -184,15 +177,11 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
  
   dimbse=xct%nkpt_co*(xct%n2b_co*xct%n1b_co*xct%nspin)**2
 
-  call timacc(51,2)
-  call timacc(52,1)
-
   do ik = 1, xct%nkpt_fi
     fi2co_bse(:,ik) = wfn2bse(fi2co_wfn(:,ik))
   enddo
 
-
-  call timacc(52,2)
+  call timacc(51,2)
 
 !------------- Read in coarse matrices: head, wings, body, exchange --------------------
   nmatrices = 4

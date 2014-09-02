@@ -1,7 +1,8 @@
 #F90 = ifort -warn all -g -traceback -check all -openmp
 #LINK = ifort -g -traceback -check all -openmp
-F90 = ifort -warn all -fast -no-ip -openmp
-LINK = ifort -fast -no-ip -openmp
+#Note: I'm keeping -ip out of the flags
+F90 = ifort -warn all -openmp -O3 -no-prec-div -static -xHost
+LINK = ifort -openmp
 LIBS =
 
 kernel_BSE.x: kernel_BSE.o common.o intkernel.o cells.o timing.o
