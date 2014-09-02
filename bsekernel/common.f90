@@ -839,4 +839,31 @@ module common_m
 
   end type kernel_header_t
 
+contains
+
+  integer function bse_index(ik, ic, iv, is, xct, ncband, nvband)
+    integer, intent(in) :: ik, ic, iv, is
+    type(xctinfo), intent(in) :: xct
+    integer, optional, intent(in) :: ncband !< default is xct%ncb_fi
+    integer, optional, intent(in) :: nvband !< default is xct%nvb_fi
+
+    integer :: ncband_, nvband_
+
+    ! The optionals are needed for the parallelization scheme sometimes, to be set to 1.
+    if(present(ncband)) then
+      ncband_ = ncband
+    else
+      ncband_ = xct%ncb_fi
+    endif
+
+    if(present(nvband)) then
+      nvband_ = nvband
+    else
+      nvband_ = xct%nvb_fi
+    endif
+
+    bse_index = is + (iv - 1 + (ic - 1 + (ik - 1)*ncband_)*nvband_)*xct%nspin
+    return
+  end function bse_index
+
 end module common_m

@@ -1,22 +1,3 @@
-!================================================================================
-!
-! Modules:
-!
-! (1) blas_m      Originally By DAS      Last Modified 1/13/2011 (das)
-!
-!     Interfaces for BLAS functions, taken from http://www.netlib.org/blas/
-!     Every BLAS function used in the code should be listed here, and this
-!     module should be used in every routine containing BLAS calls to ensure
-!     the argument types are correct.
-!
-!     Note that if any array name from netlib.org is X, the interface will
-!     be interpreted as a preprocessor macro and cause a compilation failure,
-!     solved by changed to lower-case x.
-!
-!================================================================================
-
-#include "f_defs.h"
-
 module blas_m
 
   public ! only interfaces in this module

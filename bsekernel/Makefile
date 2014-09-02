@@ -6,7 +6,11 @@ kernel_BSE.x: kernel_BSE.o common.o
 	$(LINK) -o $@ $^ $(LIBS)
 
 kernel_BSE.o: common.o intkernel.o
-intkernel.o: common.o cells.o
+intkernel.o: common.o cells.o blas.o
+
+.PHONY: clean
+clean:
+	rm -rf *.o *.mod *.x
 
 %.o: %.f90
-	$(F90) -c -o $@ $^
+	$(F90) -c $<
