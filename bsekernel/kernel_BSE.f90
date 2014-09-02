@@ -9,7 +9,8 @@ program kernel_BSE
   type (xctinfo) :: xct
   complex(DPC), allocatable :: dcc(:,:,:,:,:), dvv(:,:,:,:,:)
   complex(DPC), allocatable :: hmtrx(:,:)
-  real(DP), allocatable :: intp_coefs(:,:), eps_co(:)
+  complex(DPC) :: tmp(2,2)
+  real(DP), allocatable :: intp_coefs(:,:)
   integer, allocatable :: fi2co_wfn(:,:)
 
   integer :: nmat, kgrid_co(3), kgrid_fi(3), ik, is, iv, ic, ikcvs
@@ -36,6 +37,9 @@ program kernel_BSE
   xct%idimensions = 3
   xct%skipinterp = .false.
 
+  write(6,*)
+  write(6,*) 'Initializing default params'
+
   crys%celvol = 1d0
   crys%bdot = 0d0
   crys%bdot(1,1) = 1d0
@@ -57,9 +61,6 @@ program kernel_BSE
     enddo
   enddo ! loop on k-points on this processor
   hmtrx(:,:) = (0d0, 0d0)
-
-  allocate(eps_co(xct%nkpt_co))
-  eps_co(:) = (/ ( exp(-dble(ik-xct%nkpt_co)**2/dble(xct%nkpt_co)), ik=1,xct%nkpt_co) /)
 
   allocate(kg%f(3,xct%nkpt_fi))
   allocate(fi2co_wfn(xct%npts_intp_kernel,xct%nkpt_fi))
@@ -99,13 +100,19 @@ program kernel_BSE
     enddo
   enddo
 
-  call intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
-  write(6,*) hmtrx(1:2, 1:2)
+  write(6,*)
+  write(6,*) 'Calling intkernel'
+  call intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
+
   write(6,*)
   write(6,*) 'Summary of resulting matrix:'
   write(6,*) 'Sum(H) = ', sum(hmtrx)
   write(6,*) 'Sum(|real(H)|) = ', sum(abs(dble(hmtrx)))
   write(6,*) 'Sum(|imag(H)|) = ', sum(abs(aimag(hmtrx)))
   write(6,*) 'Norm2(real(H)+imag(H)) = ', norm2(dble(hmtrx)+aimag(hmtrx))
+  write(6,*) 'H(1:2,1:2) = '
+  tmp = hmtrx(1:2, 1:2)
+  write(6,*) tmp
+  write(6,*)
 
 end program kernel_BSE

@@ -12,7 +12,7 @@ module intkernel_m
 
 contains
 
-subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
+subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   type (crystal), intent(in) :: crys
   type (grid), intent(in) :: kg
   type (xctinfo), intent(inout) :: xct
@@ -24,15 +24,12 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   integer, intent(in) :: fi2co_wfn(:,:)
   !> (xct%npts_intp_kernel, xct%nkpt_fi) Delaunay/greedy interpolation coefficients
   real(DP), intent(in) :: intp_coefs(:,:)
-  real(DP), intent(in) :: eps_co(:)
 
   real(DP) :: vcoul, oneoverq
-  real(DP) :: vcoul0(1), closeweights(4), q0temp(3)
 
 ! FHJ: these arrays depend only on the distance w.r.t qq=0 (inside the BZ)
   real(DP), allocatable :: dist_array(:) !length of dq for a given index
   real(DP), allocatable :: vcoul_array(:), oneoverq_array(:)
-  real(DP) :: q0vec(3) = (/1d-6, 0d0, 0d0/)
 
   !> FHJ: cells structure that keeps all fine (k-kp) transitions
   type(cells_t) :: cells_fi
@@ -42,10 +39,9 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   real(DP), allocatable :: dqs(:,:), dqs_bz(:,:), abs_qs2(:), eps_intp(:)
   integer, allocatable :: vq_map(:)
   integer :: ik_cells, jkp_offset
-  integer :: isrtrq(1), closepts(4)
   integer, allocatable :: ikb(:)
   
-  integer :: iscreentemp,ijk,icb,ivb,imatrix, &
+  integer :: icb,ivb,imatrix, &
     ik,ic,iv,ikp,icp,ivp,ikt,ikcvs,ikcvsd,jj,jc,jv,js, &
     jcp,jvp,jsp,jk,jkp,dimbse,nmatrices, &
     iold,icout,ivout,ncdim,nvdim,inew,ibt
@@ -56,7 +52,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   integer, allocatable :: fi2co_bse(:,:)
   integer :: ivertp, ivert
   integer, allocatable :: jkp2offset(:)
-  real(DP) :: bsemat_fac,fac_d,fac_x,w_eff,eps,tol,factor
+  real(DP) :: bsemat_fac,fac_d,fac_x,w_eff,eps,factor
 
 !------------------------------
 ! kernel and transformation matrices
@@ -72,7 +68,6 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   wfn2bse = (/ (ik, ik=1,xct%nkpt_co) /)
   allocate(fi2co_bse(xct%npts_intp_kernel, xct%nkpt_fi))
 
-  tol=TOL_Small
   factor = -8.d0*PI_D/(crys%celvol*xct%nktotal)
   fac_d = 1d0
   fac_x = -1d0
@@ -119,18 +114,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
     abs_qs2(ik) = abs_q2
 
   ! Interpolate epsinv - Just the head
-    if (abs_q2<TOL_Zero) then
-      eps = 1.0d0
-    else
-      closeweights(:) = 0d0
-      closeweights(1) = 1d0
-      eps=0D0
-      closepts=1
-      do ijk = 1, xct%idimensions + 1
-        eps = eps + closeweights(ijk)*eps_co(closepts(ijk))
-      enddo
-    endif
-    eps_intp(ik) = eps
+    eps_intp(ik) = exp(-abs_q2*1d-2)
   enddo !ik
   !call timacc(54,2)
 ! FHJ: Done with epsinv interpolation
@@ -141,8 +125,6 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
 ! We should all contribute to calculating vcoul0 since it might involve minibz average
 
   !call timacc(55,1)
-  write(6,'(/,1x,a,i6,a)') 'Calculating v(q) with ',xct%nktotal ,' k-points'
-  iscreentemp = 0
   inew = 0
 
   do ik = 1, xct%nktotal
@@ -164,13 +146,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
     if (iold==0) then
       inew=inew+1
       dist_array(inew)=abs_q2
-      vcoul0(1)=0.0d0
-      isrtrq(1) = 1
-      q0temp(:) = q0vec(:)
-
-      vcoul0(1) = Pi_D/(abs_q2+TOL_SMALL)
       oneoverq = 1d0/sqrt(abs_q2+TOL_SMALL)
-      vcoul_array(inew) = vcoul0(1)/(8.0*Pi_D)
+      vcoul_array(inew) = 1d0/(abs_q2+TOL_SMALL)
       oneoverq_array(inew) = oneoverq/(8.0*Pi_D)
       vq_map(ik) = inew
     else
@@ -218,12 +195,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
   !call timacc(52,2)
 
 !------------- Read in coarse matrices: head, wings, body, exchange --------------------
-! PE # 0 reads and broadcasts to everybody
-  write(6,'(a)') ' Read in coarse matrices: head, wings, body, exchange '
-  ! FHJ: this is to generate nice output / time estimate
-  ! MJ: This is true irrespective of BSE/TDDFT
   nmatrices = 4
-  write(6,'(a,i0,a)') 'Interpolating BSE kernel with ', ibt*nmatrices, ' blocks'
+  write(6,'(1x,a,i0,a)') 'Interpolating BSE kernel with ', ibt*nmatrices, ' blocks'
 
   ! FHJ: For each PE, figure our which coarse k-points jkp it needs in order to
   ! interpolate the BSE matrix on the fine k-points it owns.
@@ -241,9 +214,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,eps_co)
     allocate(bsedmatrix(xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin,xct%nkpt_co))
     do jkp=1,xct%nkpt_co
 
-! JRD: READ EVERYTHING FOR A GIVEN K
           do jj=1, xct%n2b_co * xct%n1b_co
-            ! FHJ: we would be reading a file here..
+            ! FHJ: we would normally be reading a file here..
             jvp = (jj-1)/xct%n1b_co + 1
             jcp = mod(jj-1, xct%n1b_co) + 1
             ikp = jkp
