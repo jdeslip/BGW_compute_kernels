@@ -31,15 +31,14 @@ program kernel_BSE
   character*16 :: arg
   integer, allocatable :: routsrt(:)
   real(DP) :: tsec(2)
-  integer :: ncount, narg
+  integer :: ncount, narg,iargc
   integer :: nthreads, tid, OMP_GET_NUM_THREADS, OMP_GET_THREAD_NUM
 
   write(6,*)
   write(6,*) 'BerkeleyGW - Kernel for the interpolation of the BSE matrix'
   write(6,*) '==========================================================='
   write(6,*)
-  !narg = iargc()
-  narg = COMMAND_ARGUMENT_COUNT()
+  narg = iargc()
   if (narg/=3 .and. narg/=6) then
     write(0,*) 'Usage:'
     write(0,*) ' (1) kernel_BSE.x nvb_co ncb_co nkx_co nvb_fi ncb_fi nkx_fi ; or'
@@ -51,7 +50,8 @@ program kernel_BSE
     write(0,*) ' (S3) ./kernel_BSE.x  30 60 1'
     write(0,*)
     write(0,*) 'Long examples (<30s):'
-    write(0,*) ' (L1) ./kernel_BSE.x  6 15 2  2 8 4'
+    write(0,*) ' (L1) ./kernel_BSE.x  6 15 2  2 8 4'  ! last param is sqrt(nkpt_fi)
+    write(0,*) ' (L1.1) ./kernel_BSE.x  6 15 4  2 8 10'  ! last param is sqrt(nkpt_fi) 3rd param is sqrt(nkpt_co)
     write(0,*) ' (L2) ./kernel_BSE.x  2 2 3  1 1 7'
     write(0,*) ' (L3) ./kernel_BSE.x  8 12 5'
     write(0,*)
@@ -135,6 +135,8 @@ program kernel_BSE
   xct%wcoul0 = 10d0
 
   allocate(hmtrx(nmat,nmat))
+    write(6,*)"Size of hmtrx/ik = ",(16.0*nmat*nmat/(xct%nkpt_fi*xct%nkpt_fi))/1024.0," kbytes"
+
   hmtrx(:,:) = (0d0, 0d0)
   do ik=1, xct%nkpt_fi
     do is=1,xct%nspin 
@@ -239,7 +241,7 @@ program kernel_BSE
     if (ii>1) then
       if (abs(routsrt(ii)-routsrt(ii-1))>10) write(6,*)
     endif
-    write(6,9001) routnam(routsrt(ii)),tsec(1)/nthreads,tsec(2),ncount
+    write(6,9001) routnam(routsrt(ii)),tsec(1),tsec(2),ncount
   enddo
   write(6,*)
 

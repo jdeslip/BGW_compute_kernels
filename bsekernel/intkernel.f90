@@ -198,6 +198,16 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   enddo
 
   allocate(bsedmatrix_loc(xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin,jkp_offset))
+
+  write(6,'(a,6i4)')"Dims of bsed_loc = ",xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin
+  write(6,'(a,6i4)')"Dims of bsedmt   = ",xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,xct%ncb_fi,xct%nspin,xct%nspin
+  write(6,*)"Size of bsedmatrix_loc/ik = ",(16.0*xct%n1b_co*xct%n2b_co*xct%n1b_co*xct%n2b_co*xct%nspin*xct%nspin)/1024.0," kbytes"
+  write(6,*)"Size of bsedmt/ik = ",(16.0*xct%nvb_fi*xct%ncb_fi*xct%nvb_fi*xct%ncb_fi*xct%nspin*xct%nspin)/1024.0," kbytes"
+  write(6,*)"Size of dcckp/ik = ",(16.0*xct%n2b_co*xct%ncb_fi*xct%nspin)/1024.0," kbytes"
+  write(6,*)"Size of dvvkp/ik = ",(16.0*xct%n2b_co*xct%n1b_co*xct%nspin)/1024.0," kbytes"
+  write(6,*)"Size of dcc/ik = ",(16.0*xct%ncb_fi*xct%n2b_co*xct%nspin*xct%npts_intp_kernel)/1024.0," kbytes"
+  write(6,*)"Size of dvv/ik = ",(16.0*xct%nvb_fi*xct%n1b_co*xct%nspin*xct%npts_intp_kernel)/1024.0," kbytes"
+
   nmatrices = 4
   do imatrix = 1, nmatrices     
     allocate(bsedmatrix(xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin,xct%nkpt_co))
@@ -233,7 +243,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 !      For each fine k-points ik/ikp and expansion vertices ivert/iterp, find
 !      the corresponding coarse-grid points jk/jkp and interpolate the kernel.
 !==============================================================================
-    do ikt = 1, ibt
+    do ikt = 1, ibt  ! mpi parallel
       ikp = ikb(ikt)
       do ivertp = 1, xct%npts_intp_kernel
         jkp = fi2co_bse(ivertp, ikp)
@@ -245,7 +255,10 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
           enddo
 
             ! FHJ: please don`t fix the indentation yet
-            do ik = 1, xct%nkpt_fi
+            !$omp parallel do private(ik,ivert,jk,bsedmt,dq,ik_cells,abs_q2,eps,iold) &
+            !$omp private (vcoul,oneoverq,w_eff,ncdim,nvdim,icout,ivout,bsemat_fac,icp,ivp) &
+            !$omp private( jsp,icb,ivb,ikcvsd,ic,iv,js,ikcvs)
+            do ik = 1, xct%nkpt_fi  ! can be >10,000 or 1 sometimes :-)
               do ivert = 1, xct%npts_intp_kernel
                 jk = fi2co_bse(ivert, ik)
               
@@ -364,11 +377,11 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 ! XXX: Thread?
 ! XXX: WHY IS BSE_INDEX FASTER ON THE SPIN INDEX??
 
-                do icp = 1, xct%ncb_fi
+                do icp = 1, xct%ncb_fi  ! L1 example trips = 8
 !                  if (xct%ipar .eq. 1 .or. icp .eq. 1) then
-                    do ivp = 1, xct%nvb_fi
+                    do ivp = 1, xct%nvb_fi  ! L1 example trips = 2
                       if (xct%ipar .lt. 3 .or. ivp .eq. 1) then
-                        do jsp = 1, xct%nspin
+                        do jsp = 1, xct%nspin  ! L1 example trips = 1
 !                          if (xct%ipar .eq. 1) then 
                             icb=icp
                             ivb=ivp
@@ -401,6 +414,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
                 call timacc(58,2)
               enddo ! ivert / jk
             enddo ! ik
+            !$omp end parallel do
       enddo ! ivertp / jkp
     enddo ! ikp
   enddo ! imatrix 
@@ -444,14 +458,19 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
   integer :: js,jsp,iv,ivp,jc,jcp,&
     js_dvvk, js_dvvkp, js_dcck, js_dcckp, bse_co_js, bse_co_jsp
   
-  complex(DPC), allocatable :: mat_vcvc(:,:,:,:),mat_vfvc(:,:,:,:), &
+  complex(DPC), allocatable :: mat_vcvc(:,:,:),mat_vfvc(:,:,:), &
     mat_vfvf(:,:,:,:),mat_cccc(:,:,:,:), &
     mat_cfcc(:,:,:,:),mat_cfcf(:,:,:,:)
 !  complex(DPC), allocatable :: dummy(:,:,:,:), dummyp(:,:,:,:), dummy2(:,:,:,:), dummy3(:,:,:,:), dvvkn(:,:)
   
-  bse_fi=0.0
+!   bse_fi=0.0  ! Why is this set to zero if it is just overwritten later?
+  !  are some things set to zero but then not overwritten later, but then
+  ! those zero values are used later?
   
-  do js=1,xct%nspin
+  do js=1,xct%nspin  ! nspin = 1 in this kernel.  Is that always the case?
+    !  these loops don't really make sense, the matmuls are the 
+    !  same for every iteration.  
+    !  I am guessing we are just missing from the real code?
     do jsp=1,xct%nspin
       
       if (xct%nspin .eq. 1) then
@@ -464,62 +483,74 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
       end if
 
 ! Fastest but worst on memory
+! why the note about worst on memory?  These are pretty small, hardly a memory hog
 
-        allocate(mat_vcvc(xct%n1b_co,xct%n1b_co,xct%n2b_co,xct%n2b_co))
+! Wichmann:  I don't see any reason why these mats need to be allocated
+! with a size for every jc and jcp iteration. 
+
+        allocate(mat_vcvc(xct%n1b_co,xct%n1b_co,xct%n2b_co))
+        allocate(mat_vfvc(xct%nvb_fi,xct%n1b_co,xct%n2b_co))
+        allocate(mat_vfvf(xct%nvb_fi,xct%nvb_fi,xct%n2b_co,xct%n2b_co))
+        allocate(mat_cccc(xct%n2b_co,xct%n2b_co,xct%nvb_fi,xct%nvb_fi))
+!  Wichmann:  We can ALL fuse the jcp and jc loops and just have series of 
+!  matmuls and copies.  Better for cache and memory footprint
+
+!  Need to make sure we are not missing something from the larger code that 
+!  prevent fusion of jcp/jc loops.
 
         do jcp=1,xct%n2b_co
-          do jc=1,xct%n2b_co
-            ! XXX better not to copy!
-            mat_vcvc(:xct%n1b_co,1:xct%n1b_co,jc,jcp) = &
-              bse_co(1:xct%n1b_co,jc,1:xct%n1b_co,jcp,bse_co_js,bse_co_jsp)
-          enddo
-        enddo
+!           do jc=1,xct%n2b_co
+!             mat_vcvc(:xct%n1b_co,1:xct%n1b_co,jc) = &
+!               bse_co(1:xct%n1b_co,jc,1:xct%n1b_co,jcp,bse_co_js,bse_co_jsp)
+!           enddo
+!         enddo
 
 ! Interpolate v,v`
 
-        allocate(mat_vfvc(xct%nvb_fi,xct%n1b_co,xct%n2b_co,xct%n2b_co))
 
-        do jc=1,xct%n2b_co
-          do jcp=1,xct%n2b_co
-            mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc,jcp) = &
+!           do jcp=1,xct%n2b_co  ! L1 example trip = 15
+        do jc=1,xct%n2b_co   ! L1 example trip = 15
+            ! L1 example nvb_fi = 2
+            ! L1 example n1b_co = 6
+            mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc) = &
               MATMUL((dvvk(1:xct%nvb_fi,1:xct%n1b_co,js_dvvk)), &
-              (mat_vcvc(1:xct%n1b_co,1:xct%n1b_co,jc,jcp)))
+!               (mat_vcvc(1:xct%n1b_co,1:xct%n1b_co,jc)))
+              bse_co(1:xct%n1b_co,jc,1:xct%n1b_co,jcp,bse_co_js,bse_co_jsp))
           enddo
-        enddo
+!         enddo
 
-        deallocate(mat_vcvc)
-        allocate(mat_vfvf(xct%nvb_fi,xct%nvb_fi,xct%n2b_co,xct%n2b_co))
 
+!           do jcp=1,xct%n2b_co
         do jc=1,xct%n2b_co
-          do jcp=1,xct%n2b_co
             mat_vfvf(1:xct%nvb_fi,1:xct%nvb_fi,jc,jcp) = &
-              MATMUL((mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc,jcp)), &
+              MATMUL((mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc)), &
               conjg(dvvkp(1:xct%n1b_co,1:xct%nvb_fi,js_dvvkp)))
           enddo
         enddo
 
 ! Reorder from v,v` to c,c`
 
-        deallocate(mat_vfvc)
-        allocate(mat_cccc(xct%n2b_co,xct%n2b_co,xct%nvb_fi,xct%nvb_fi))
 
-        do jcp=1,xct%n2b_co
-          do jc=1,xct%n2b_co
-            mat_cccc(jc,jcp,1:xct%nvb_fi,1:xct%nvb_fi) = &
-              mat_vfvf(1:xct%nvb_fi,1:xct%nvb_fi,jc,jcp)
-          enddo
-        enddo
+!         do jcp=1,xct%n2b_co
+!           do jc=1,xct%n2b_co
+!             mat_cccc(jc,jcp,1:xct%nvb_fi,1:xct%nvb_fi) = &
+!               mat_vfvf(1:xct%nvb_fi,1:xct%nvb_fi,jc,jcp)
+!           enddo
+!         enddo
 
 ! Interpolate c,c`
 
-        deallocate(mat_vfvf)
         allocate(mat_cfcc(xct%ncb_fi,xct%n2b_co,xct%nvb_fi,xct%nvb_fi))
 
         do iv=1,xct%nvb_fi
           do ivp=1,xct%nvb_fi
+            mat_cccc(1:xct%n2b_co,1:xct%n2b_co,iv,ivp) = &
+              mat_vfvf(iv,ivp,1:xct%n2b_co,1:xct%n2b_co)
+
             mat_cfcc(1:xct%ncb_fi,1:xct%n2b_co,iv,ivp) = &
               MATMUL(conjg(dcck(1:xct%ncb_fi,1:xct%n2b_co,js_dcck)), &
               (mat_cccc(1:xct%n2b_co,1:xct%n2b_co,iv,ivp)))
+!               mat_vfvf(iv,ivp,1:xct%n2b_co,1:xct%n2b_co))
           enddo
         enddo
 
@@ -545,6 +576,9 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
           enddo
         enddo
 
+        deallocate(mat_vcvc)
+        deallocate(mat_vfvc)
+        deallocate(mat_vfvf)
         deallocate(mat_cfcf)
 
 !      endif
