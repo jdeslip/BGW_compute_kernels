@@ -469,6 +469,7 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
 
         do jcp=1,xct%n2b_co
           do jc=1,xct%n2b_co
+            ! XXX better not to copy!
             mat_vcvc(:xct%n1b_co,1:xct%n1b_co,jc,jcp) = &
               bse_co(1:xct%n1b_co,jc,1:xct%n1b_co,jcp,bse_co_js,bse_co_jsp)
           enddo

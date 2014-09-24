@@ -6,12 +6,18 @@
 
 #FHJ: Note: I'm keeping -ip out of the compile flags.
 #It takes forever to compile BGW with -ip!
-F90 = ifort -warn all -openmp -O3 -no-prec-div -static -xHost
+#F90 = ifort -warn all -openmp -O3 -no-prec-div -static -xHost
+#LINK = ifort -openmp
 
-LINK = ifort -openmp
+#F90 = /opt/cray/craype/2.1.2/bin/ftn #ifort -warn all -openmp -O3 -no-prec-div -static -xHost
+#LINK = /opt/cray/craype/2.1.2/bin/ftn #ifort -openmp
+F90 = ftn
+LINK = ftn
+
+
 LIBS =
 
-kernel_BSE.x: kernel_BSE.o common.o intkernel.o cells.o timing.o
+kernel_BSE.x: kernel_BSE.o common.o intkernel.o cells.o timing.o blas.o
 	$(LINK) -o $@ $^ $(LIBS)
 
 kernel_BSE.o: common.o intkernel.o timing.o

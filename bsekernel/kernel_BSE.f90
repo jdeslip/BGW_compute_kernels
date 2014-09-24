@@ -38,7 +38,8 @@ program kernel_BSE
   write(6,*) 'BerkeleyGW - Kernel for the interpolation of the BSE matrix'
   write(6,*) '==========================================================='
   write(6,*)
-  narg = iargc()
+  !narg = iargc()
+  narg = COMMAND_ARGUMENT_COUNT()
   if (narg/=3 .and. narg/=6) then
     write(0,*) 'Usage:'
     write(0,*) ' (1) kernel_BSE.x nvb_co ncb_co nkx_co nvb_fi ncb_fi nkx_fi ; or'
