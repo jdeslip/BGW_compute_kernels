@@ -13,7 +13,7 @@ module intkernel_m
 
 contains
 
-subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
+subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,inode)
   type (crystal), intent(in) :: crys
   type (grid), intent(in) :: kg
   type (xctinfo), intent(inout) :: xct
@@ -25,6 +25,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   integer, intent(in) :: fi2co_wfn(:,:)
   !> (xct%npts_intp_kernel, xct%nkpt_fi) Delaunay/greedy interpolation coefficients
   real(DP), intent(in) :: intp_coefs(:,:)
+  integer, intent(in) :: nkpt_own
+  integer, intent(in) :: inode
 
   real(DP) :: vcoul, oneoverq
 
@@ -45,7 +47,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   integer :: icb,ivb,imatrix, &
     ik,ic,iv,ikp,icp,ivp,ikt,ikcvs,ikcvsd,jj,jc,jv,js, &
     jcp,jvp,jsp,jk,jkp,dimbse,nmatrices, &
-    iold,icout,ivout,ncdim,nvdim,inew,ibt
+    iold,icout,ivout,ncdim,nvdim,inew
   !> (xct%nkpt_co) maps a k-point in the WFN_co to the bse*mat files.
   integer, allocatable :: wfn2bse(:)
   !> (xct%npts_intp_kernel, xct%nkpt_fi) For a given k-point in the fine grid,
@@ -65,7 +67,6 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
   call timacc(51,1)
   allocate(ikb(xct%nkpt_fi))
   ikb = (/ (ik, ik=1,xct%nkpt_fi) /)
-  ibt = xct%nkpt_fi
   allocate(wfn2bse(xct%nkpt_co))
   wfn2bse = (/ (ik, ik=1,xct%nkpt_co) /)
   allocate(fi2co_bse(xct%npts_intp_kernel, xct%nkpt_fi))
@@ -159,10 +160,12 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 !--------------------------------
 ! Allocate data
 
-  if (.not. xct%skipinterp) then
-    write(6,'(1x,a)') 'Performing Kernel Interpolation'
-  else
-    write(6,'(1x,a)') 'Building Interaction Kernel'
+  if (inode==0) then
+    if (.not. xct%skipinterp) then
+      write(6,'(1x,a)') 'Performing Kernel Interpolation'
+    else
+      write(6,'(1x,a)') 'Building Interaction Kernel'
+    endif
   endif
 
 !  if (xct%ipar .eq. 1) then
@@ -185,7 +188,9 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 
 !------------- Read in coarse matrices: head, wings, body, exchange --------------------
   nmatrices = 4
-  write(6,'(1x,a,i0,a)') 'Interpolating BSE kernel with ', ibt*nmatrices, ' blocks'
+  if (inode==0) then
+    write(6,'(1x,a,i0,a)') 'Interpolating BSE kernel with ', nkpt_own*nmatrices, ' blocks'
+  endif
 
   ! FHJ: For each PE, figure our which coarse k-points jkp it needs in order to
   ! interpolate the BSE matrix on the fine k-points it owns.
@@ -199,14 +204,16 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 
   allocate(bsedmatrix_loc(xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin,jkp_offset))
 
-  write(6,'(a,6i4)')"Dims of bsed_loc = ",xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin
-  write(6,'(a,6i4)')"Dims of bsedmt   = ",xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,xct%ncb_fi,xct%nspin,xct%nspin
-  write(6,*)"Size of bsedmatrix_loc/ik = ",(16.0*xct%n1b_co*xct%n2b_co*xct%n1b_co*xct%n2b_co*xct%nspin*xct%nspin)/1024.0," kbytes"
-  write(6,*)"Size of bsedmt/ik = ",(16.0*xct%nvb_fi*xct%ncb_fi*xct%nvb_fi*xct%ncb_fi*xct%nspin*xct%nspin)/1024.0," kbytes"
-  write(6,*)"Size of dcckp/ik = ",(16.0*xct%n2b_co*xct%ncb_fi*xct%nspin)/1024.0," kbytes"
-  write(6,*)"Size of dvvkp/ik = ",(16.0*xct%n2b_co*xct%n1b_co*xct%nspin)/1024.0," kbytes"
-  write(6,*)"Size of dcc/ik = ",(16.0*xct%ncb_fi*xct%n2b_co*xct%nspin*xct%npts_intp_kernel)/1024.0," kbytes"
-  write(6,*)"Size of dvv/ik = ",(16.0*xct%nvb_fi*xct%n1b_co*xct%nspin*xct%npts_intp_kernel)/1024.0," kbytes"
+  if (inode==0) then
+    write(6,'(1x,a,6i4)')"Dims of bsed_loc = ",xct%n1b_co,xct%n2b_co,xct%n1b_co,xct%n2b_co,xct%nspin,xct%nspin
+    write(6,'(1x,a,6i4)')"Dims of bsedmt   = ",xct%nvb_fi,xct%ncb_fi,xct%nvb_fi,xct%ncb_fi,xct%nspin,xct%nspin
+    write(6,*)"Size of bsedmatrix_loc/ik = ",(16.0*xct%n1b_co*xct%n2b_co*xct%n1b_co*xct%n2b_co*xct%nspin*xct%nspin)/1024.0," kbytes"
+    write(6,*)"Size of bsedmt/ik = ",(16.0*xct%nvb_fi*xct%ncb_fi*xct%nvb_fi*xct%ncb_fi*xct%nspin*xct%nspin)/1024.0," kbytes"
+    write(6,*)"Size of dcckp/ik = ",(16.0*xct%n2b_co*xct%ncb_fi*xct%nspin)/1024.0," kbytes"
+    write(6,*)"Size of dvvkp/ik = ",(16.0*xct%n2b_co*xct%n1b_co*xct%nspin)/1024.0," kbytes"
+    write(6,*)"Size of dcc/ik = ",(16.0*xct%ncb_fi*xct%n2b_co*xct%nspin*xct%npts_intp_kernel)/1024.0," kbytes"
+    write(6,*)"Size of dvv/ik = ",(16.0*xct%nvb_fi*xct%n1b_co*xct%nspin*xct%npts_intp_kernel)/1024.0," kbytes"
+  endif
 
   nmatrices = 4
   do imatrix = 1, nmatrices     
@@ -243,7 +250,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs)
 !      For each fine k-points ik/ikp and expansion vertices ivert/iterp, find
 !      the corresponding coarse-grid points jk/jkp and interpolate the kernel.
 !==============================================================================
-    do ikt = 1, ibt  ! mpi parallel
+    do ikt = 1, nkpt_own  ! mpi parallel
       ikp = ikb(ikt)
       do ivertp = 1, xct%npts_intp_kernel
         jkp = fi2co_bse(ivertp, ikp)
