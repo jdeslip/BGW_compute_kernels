@@ -14,7 +14,6 @@
 F90 = ftn
 LINK = ftn
 
-
 LIBS =
 
 kernel_BSE.x: kernel_BSE.o common.o intkernel.o cells.o timing.o blas.o
@@ -27,9 +26,14 @@ timing.o: common.o
 .PHONY: clean tarball
 clean:
 	rm -rf *.o *.mod *.x
-tarball:
-	tar --transform 's,^,kernel_BSE/,' -czf kernel_BSE.tgz *.f90 Makefile
 
+tarball: d:=$(shell date +%Y%m%d)
+tarball: r:=$(shell git rev-list --branches master master | wc -l)
+tarball: fname:="kernel_BSE-r${r}-${d}.tgz"
+tarball:
+	echo "`git rev-list --max-count=1 --header master`" > VERSION
+	tar --transform 's,^,kernel_BSE/,' -czf ${fname} *.f90 Makefile VERSION
+	rm VERSION
 
 %.o: %.f90
 	$(F90) -c $<
