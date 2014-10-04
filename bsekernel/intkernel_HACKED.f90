@@ -56,7 +56,8 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
   integer :: ivertp, ivert
   integer, allocatable :: jkp2offset(:)
   real(DP) :: bsemat_fac,fac_d,fac_x,w_eff,eps,factor
-
+  integer TEMP
+  integer TEMP2
 !------------------------------
 ! kernel and transformation matrices
   complex(DPC), allocatable :: &
@@ -64,7 +65,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
     bsedmatrix_loc(:,:,:,:,:,:,:), &
     dcckp(:,:,:), dvvkp(:,:,:)
 
-  !call timacc(51,1)
+  call timacc(51,1)
   allocate(ikb(xct%nkpt_fi))
   ikb = (/ (ik, ik=1,xct%nkpt_fi) /)
   allocate(wfn2bse(xct%nkpt_co))
@@ -184,7 +185,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
     fi2co_bse(:,ik) = wfn2bse(fi2co_wfn(:,ik))
   enddo
 
-  !call timacc(51,2)
+  call timacc(51,2)
 
 !------------- Read in coarse matrices: head, wings, body, exchange --------------------
   nmatrices = 4
@@ -278,7 +279,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
                 ! FHJ: and now we can reuse all the information from the cell
                 ! structure to get the mapping to the BZ, v(q) and the interpolated
                 ! epsilon in O(1) operations.
-                !call timacc(56,1)
+                call timacc(56,1)
                 call cells_find_exactly(cells_fi, dq, ik_cells)
                 if (ik_cells==0) then
                   write(0,'(a)') 'Found a point that was not calculated before:'
@@ -295,7 +296,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
                 ! The 1/(8*pi) is already included
                 vcoul = vcoul_array(iold)
                 oneoverq = oneoverq_array(iold)
-                !call timacc(56,2)
+                call timacc(56,2)
                 
                 w_eff = vcoul * eps
                 if (abs_q2<TOL_Zero) then
@@ -325,7 +326,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
 !                endif
                 endif !ivert==1
 
-                !call timacc(57,1)
+                call timacc(57,1)
 
                 !write(6,*) bsedmatrix_loc(1,1,1,1,1,1,jkp_offset+1)
                 if (.not. xct%skipinterp) then
@@ -351,7 +352,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
                     enddo
                 endif
 
-                !call timacc(57,2)
+                call timacc(57,2)
 
 !------------------------------
 ! Add interaction kernel to the Hamiltonian
@@ -370,7 +371,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
                 bsemat_fac = bsemat_fac * intp_coefs(ivert, ik) * intp_coefs(ivertp, ikp)
 
                 if(abs(bsemat_fac) < TOL_Zero) cycle
-                !call timacc(58,1)
+                call timacc(58,1)
 
 ! JRD: When comparing these loops with the loops in diag.f90 notice that:
 ! iv -> ivp
@@ -403,12 +404,15 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
 !                            ivb=1
 !                            ikcvsd = bse_index(ikt, icb, ivb, jsp, xct, ncband = 1, nvband = 1)
 !                          endif
+                          TEMP = xct%nspin
 
                           do ic = 1, xct%ncb_fi
                             do iv = 1, xct%nvb_fi
-                              do js = 1,xct%nspin
-                                ikcvs = bse_index(ik, ic, iv, js, xct)
-                                hmtrx(ikcvs,ikcvsd) = hmtrx(ikcvs,ikcvsd) + &
+                              TEMP2 = (iv - 1 + (ic - 1 + (ik - 1)*xct%ncb_fi)*xct%nvb_fi)*xct%nspin
+                              do js = 1,TEMP !xct%nspin
+                                ikcvs = js + TEMP2 !(iv - 1 + (ic - 1 + (ik - 1)*xct%ncb_fi)*xct%nvb_fi)*xct%nspin
+                                !ikcvs = bse_index(ik, ic, iv, js, xct)
+                                hmtrx(ikcvs,ikcvsd) = &!hmtrx(ikcvs,ikcvsd) + &
                                   bsemat_fac * bsedmt(iv,ic,ivb,icb,js,jsp,1)
                               enddo              ! js
                             enddo              ! iv
@@ -418,7 +422,7 @@ subroutine intkernel(crys,kg,xct,hmtrx,dcc,dvv,fi2co_wfn,intp_coefs,nkpt_own,ino
                     enddo              ! ivp
 !                  endif
                 enddo              ! icp
-                !call timacc(58,2)
+                call timacc(58,2)
               enddo ! ivert / jk
             enddo ! ik
             !$omp end parallel do
@@ -465,14 +469,9 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
   integer :: js,jsp,iv,ivp,jc,jcp,&
     js_dvvk, js_dvvkp, js_dcck, js_dcckp, bse_co_js, bse_co_jsp
   
-  !complex(DPC), allocatable :: mat_vcvc(:,:,:),mat_vfvc(:,:,:), &
-  !  mat_vfvf(:,:,:,:),mat_cccc(:,:,:,:), &
-  !  mat_cfcc(:,:,:,:),mat_cfcf(:,:,:,:)
-
-  complex(DPC) :: mat_vcvc(xct%n1b_co,xct%n1b_co,xct%n2b_co), mat_vfvc(xct%nvb_fi,xct%n1b_co,xct%n2b_co), &
-    mat_vfvf(xct%nvb_fi,xct%nvb_fi,xct%n2b_co,xct%n2b_co), mat_cccc(xct%n2b_co,xct%n2b_co,xct%nvb_fi,xct%nvb_fi), &
-    mat_cfcf(xct%ncb_fi,xct%ncb_fi,xct%nvb_fi,xct%nvb_fi), mat_cfcc(xct%ncb_fi,xct%n2b_co,xct%nvb_fi,xct%nvb_fi)
-
+  complex(DPC), allocatable :: mat_vcvc(:,:,:),mat_vfvc(:,:,:), &
+    mat_vfvf(:,:,:,:),mat_cccc(:,:,:,:), &
+    mat_cfcc(:,:,:,:),mat_cfcf(:,:,:,:)
 !  complex(DPC), allocatable :: dummy(:,:,:,:), dummyp(:,:,:,:), dummy2(:,:,:,:), dummy3(:,:,:,:), dvvkn(:,:)
   
 !   bse_fi=0.0  ! Why is this set to zero if it is just overwritten later?
@@ -500,20 +499,16 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
 ! Wichmann:  I don't see any reason why these mats need to be allocated
 ! with a size for every jc and jcp iteration. 
 
-        !allocate(mat_vcvc(xct%n1b_co,xct%n1b_co,xct%n2b_co))
-        !allocate(mat_vfvc(xct%nvb_fi,xct%n1b_co,xct%n2b_co))
-        !allocate(mat_vfvf(xct%nvb_fi,xct%nvb_fi,xct%n2b_co,xct%n2b_co))
-        !allocate(mat_cccc(xct%n2b_co,xct%n2b_co,xct%nvb_fi,xct%nvb_fi))
+        allocate(mat_vcvc(xct%n1b_co,xct%n1b_co,xct%n2b_co))
+        allocate(mat_vfvc(xct%nvb_fi,xct%n1b_co,xct%n2b_co))
+        allocate(mat_vfvf(xct%nvb_fi,xct%nvb_fi,xct%n2b_co,xct%n2b_co))
+        allocate(mat_cccc(xct%n2b_co,xct%n2b_co,xct%nvb_fi,xct%nvb_fi))
 !  Wichmann:  We can ALL fuse the jcp and jc loops and just have series of 
 !  matmuls and copies.  Better for cache and memory footprint
 
 !  Need to make sure we are not missing something from the larger code that 
 !  prevent fusion of jcp/jc loops.
-        !XXX-XXX-XXX-XXX
-        !uncomment these lines to make intkernel 4x faster
-        !xct%nvb_fi = 2
-        !xct%n1b_co = 6
-        !XXX-XXX-XXX-XXX
+
         do jcp=1,xct%n2b_co
 !           do jc=1,xct%n2b_co
 !             mat_vcvc(:xct%n1b_co,1:xct%n1b_co,jc) = &
@@ -530,11 +525,8 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
             ! L1 example n1b_co = 6
             mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc) = &
               MATMUL((dvvk(1:xct%nvb_fi,1:xct%n1b_co,js_dvvk)), &
+!               (mat_vcvc(1:xct%n1b_co,1:xct%n1b_co,jc)))
               bse_co(1:xct%n1b_co,jc,1:xct%n1b_co,jcp,bse_co_js,bse_co_jsp))
-            !!DIR$ FORCEINLINE
-            !call my_matmul1(dvvk(1:xct%nvb_fi,1:xct%n1b_co,js_dvvk), &
-            !    bse_co(1:xct%n1b_co,jc,1:xct%n1b_co,jcp,bse_co_js,bse_co_jsp), &
-            !    mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc))
           enddo
 !         enddo
 
@@ -544,10 +536,6 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
             mat_vfvf(1:xct%nvb_fi,1:xct%nvb_fi,jc,jcp) = &
               MATMUL((mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc)), &
               conjg(dvvkp(1:xct%n1b_co,1:xct%nvb_fi,js_dvvkp)))
-            !!DIR$ FORCEINLINE
-            !call my_matmul1(mat_vfvc(1:xct%nvb_fi,1:xct%n1b_co,jc), &
-            !    conjg(dvvkp(1:xct%n1b_co,1:xct%nvb_fi,js_dvvkp)), &
-            !    mat_vfvf(1:xct%nvb_fi,1:xct%nvb_fi,jc,jcp))
           enddo
         enddo
 
@@ -563,7 +551,7 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
 
 ! Interpolate c,c`
 
-        !allocate(mat_cfcc(xct%ncb_fi,xct%n2b_co,xct%nvb_fi,xct%nvb_fi))
+        allocate(mat_cfcc(xct%ncb_fi,xct%n2b_co,xct%nvb_fi,xct%nvb_fi))
 
         do iv=1,xct%nvb_fi
           do ivp=1,xct%nvb_fi
@@ -573,29 +561,22 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
             mat_cfcc(1:xct%ncb_fi,1:xct%n2b_co,iv,ivp) = &
               MATMUL(conjg(dcck(1:xct%ncb_fi,1:xct%n2b_co,js_dcck)), &
               (mat_cccc(1:xct%n2b_co,1:xct%n2b_co,iv,ivp)))
-            !!DIR$ FORCEINLINE
-            !call my_matmul(conjg(dcck(1:xct%ncb_fi,1:xct%n2b_co,js_dcck)), &
-            !    mat_cccc(1:xct%n2b_co,1:xct%n2b_co,iv,ivp), &
-            !    mat_cfcc(1:xct%ncb_fi,1:xct%n2b_co,iv,ivp) )
+!               mat_vfvf(iv,ivp,1:xct%n2b_co,1:xct%n2b_co))
           enddo
         enddo
 
-        !deallocate(mat_cccc)
-        !allocate(mat_cfcf(xct%ncb_fi,xct%ncb_fi,xct%nvb_fi,xct%nvb_fi))
+        deallocate(mat_cccc)
+        allocate(mat_cfcf(xct%ncb_fi,xct%ncb_fi,xct%nvb_fi,xct%nvb_fi))
 
         do iv=1,xct%nvb_fi
           do ivp=1,xct%nvb_fi
             mat_cfcf(1:xct%ncb_fi,1:xct%ncb_fi,iv,ivp) = &
               MATMUL((mat_cfcc(1:xct%ncb_fi,1:xct%n2b_co,iv,ivp)), &
               (dcckp(1:xct%n2b_co,1:xct%ncb_fi,js_dcckp)))
-            !!DIR$ FORCEINLINE
-            !call my_matmul(mat_cfcc(1:xct%ncb_fi,1:xct%n2b_co,iv,ivp), &
-            !    dcckp(1:xct%n2b_co,1:xct%ncb_fi,js_dcckp), &
-            !    mat_cfcf(1:xct%ncb_fi,1:xct%ncb_fi,iv,ivp) )
           enddo
         enddo
 
-        !deallocate(mat_cfcc)
+        deallocate(mat_cfcc)
 
 ! Reorder matrix
 
@@ -606,113 +587,16 @@ subroutine interpolate(xct,bse_co,bse_fi,dcck,dcckp,dvvk,dvvkp)
           enddo
         enddo
 
-        !deallocate(mat_vcvc)
-        !deallocate(mat_vfvc)
-        !deallocate(mat_vfvf)
-        !deallocate(mat_cfcf)
+        deallocate(mat_vcvc)
+        deallocate(mat_vfvc)
+        deallocate(mat_vfvf)
+        deallocate(mat_cfcf)
 
 !      endif
     enddo
   enddo
 
   return
-
-  contains
-
-    subroutine my_matmul1(A,B,C)
-      complex(DPC), intent(in) :: A(:,:)
-      complex(DPC), intent(in) :: B(:,:)
-      complex(DPC), intent(out) :: C(:,:)
-
-      integer ::  ii, jj, kk
-      integer :: ni, nj, nk
-
-      ni = size(C,1)
-      nj = size(C,2)
-      nk = size(A,2)
-      !ni = 2
-      ! FHJ - FIXME - code runs slower if I fix the following sizes
-      !nj = 6
-      !nk = 6
-
-      C(:,:) = 0d0
-      !C = matmul(A,B)
-      !!DIR$ unroll
-      !!DIR$ LOOP COUNT (2)
-      do jj=1,nj
-        !!DIR$ unroll
-        !!DIR$ LOOP COUNT (6)
-        do kk=1,nk
-          !!DIR$ unroll
-          !!DIR$ LOOP COUNT (2)
-          do ii=1,ni
-            !C(1,jj) = C(1,jj) + A(1,kk)*B(kk,jj)
-            !C(2,jj) = C(2,jj) + A(2,kk)*B(kk,jj)
-            C(ii,jj) = C(ii,jj) + A(ii,kk)*B(kk,jj)
-          enddo
-        enddo
-      enddo
-    end subroutine my_matmul1
-
-    subroutine my_matmul(A,B,C)
-      complex(DPC), intent(in) :: A(:,:)
-      complex(DPC), intent(in) :: B(:,:)
-      complex(DPC), intent(out) :: C(:,:)
-
-      integer ::  ii, jj, kk
-      integer :: ni, nj, nk
-      
-      C = matmul(A,B)
-
-!      ni = size(C,1)
-!      nj = size(C,2)
-!      nk = size(A,2)
-!
-!      C(:,:) = 0d0
-!      !!DIR$ unroll
-!      !!DIR$ LOOP COUNT (2)
-!      do jj=1,nj
-!        !!DIR$ unroll
-!        !!DIR$ LOOP COUNT (6)
-!        do kk=1,nk
-!          !!DIR$ unroll
-!          !!DIR$ LOOP COUNT (2)
-!          do ii=1,ni
-!            !C(1,jj) = C(1,jj) + A(1,kk)*B(kk,jj)
-!            !C(2,jj) = C(2,jj) + A(2,kk)*B(kk,jj)
-!            C(ii,jj) = C(ii,jj) + A(ii,kk)*B(kk,jj)
-!          enddo
-!        enddo
-!      enddo
-
-      !integer :: nk
-      !integer :: ik
-
-      !nk = size(A,2)
-      !if (nk==1) then
-      !  nk = 1
-      !  C(:,:) = matmul(A(:,:nk), B(:nk,:))
-      !elseif (nk==2) then
-      !  nk = 2
-      !  C(:,:) = matmul(A(:,:nk), B(:nk,:))
-      !elseif (nk==3) then
-      !  nk = 3
-      !  C(:,:) = matmul(A(:,:nk), B(:nk,:))
-      !elseif (nk==4) then
-      !  nk = 4
-      !  C(:,:) = matmul(A(:,:nk), B(:nk,:))
-      !elseif (nk==5) then
-      !  nk = 5
-      !  C(:,:) = matmul(A(:,:nk), B(:nk,:))
-      !elseif (nk==6) then
-      !  nk = 6
-      !  C(:,:) = matmul(A(:,:nk), B(:nk,:))
-      !else
-      !  C(:,:) = matmul(A(:,:nk), B(:nk,:))
-      !endif
-
-    end subroutine my_matmul
-
 end subroutine interpolate
 
 !> FHJ: Move a point (qq) to the 1st BZ (WS cell). Output vector is qq_bz, 
