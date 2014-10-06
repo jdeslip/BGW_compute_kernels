@@ -1,0 +1,10 @@
+#Always use:
+export I_MPI_PIN_DOMAIN=omp
+
+# More than 60 threads: distribute threads sequentially in all cores
+export KMP_AFFINITY=compact
+
+# Less than 60 threads: use scatter (round-robin) or ballanced option to avoid iddle cores:
+export KMP_AFFINITY=scatter
+or
+export KMP_AFFINITY=scatter,verbose
