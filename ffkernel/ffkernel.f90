@@ -392,13 +392,12 @@ time_chc = 0D0
 ! JRD: Now do CH term
           
 !         ALLOCATE(schDt_array(nFreq),schDt_matrix(nFreq,))
-!         schDt_array(:) = 0D0
 
         call timget(starttime_ch)
  
 !         schdt_array = 0D0
 !$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig,schDtt,I_epsRggp_int, &
-!$OMP                      I_epsAggp_int,schD,schDt,ifreq) 
+!$OMP                      I_epsAggp_int,schD,schDt,ifreq)
 
 ! The following omp directive is in error.  There is not a reduction on schdt_array with
 ! respect to the omp loop, in this case the ifreq loop.  Each omp iteration has a unique
@@ -407,9 +406,6 @@ time_chc = 0D0
         do ifreq=1,nFreq
 
 !             schDt = (0D0,0D0)
-      do n1=1,number_bands
-        flag_occ = (n1.le.nvband)
-        occ = 1.0d0
 
             do my_igp = 1, ngpown
               indigp = inv_igp_index(my_igp)
@@ -421,6 +417,7 @@ time_chc = 0D0
 
 ! JRD: The below loop is performance critical
 
+      do n1=1,number_bands
               schDtt = (0D0,0D0)
               do ig = 1, igmax
 
@@ -436,11 +433,11 @@ time_chc = 0D0
               enddo
               !schDt = schDt + schDtt * vcoul(igp)
               schdt_matrix(ifreq,n1) = schdt_matrix(ifreq,n1) + schDtt
+      enddo
             enddo
 
 ! XXX: Threads could be stomping on each-other`s cache over this... try reduction?
 !            schdt_array(ifreq) = schdt_array(ifreq) + schDt
-      enddo
 
         enddo
 !$OMP END PARALLEL DO
@@ -460,7 +457,7 @@ time_chc = 0D0
 !$OMP PARALLEL do private (ifreq,schDt,cedifft_zb,cedifft_coh,cedifft_cor, &
 !$OMP                      cedifft_zb_right,cedifft_zb_left,schDt_right,schDt_left, &
 !$OMP                      schDt_avg,schDt_lin,schDt_lin2,intfact,iw, &
-!$OMP                      schDt_lin3) reduction(+:schDi,schDi_corb,schDi_cor,sch2Di) 
+!$OMP                      schDt_lin3) reduction(+:schDi,schDi_corb,schDi_cor,sch2Di)
         do ifreq=1,nFreq
 
             schDt = schdt_matrix(ifreq,n1)
