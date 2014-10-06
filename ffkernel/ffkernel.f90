@@ -25,6 +25,8 @@ integer :: ispin, iw, ifreq, ijk, iwlda
 integer :: number_bands,nvband,ncouls,ngpown,nfreqeval,nFreq
 integer :: my_igp, indigp, ig, igp, igmax
 integer :: ggpsum
+integer,parameter::igblk = 512
+integer :: igbeg,igend,my_igp_beg,my_igp_end,n1_beg,n1_end,cblk
 integer, allocatable :: indinv(:), inv_igp_index(:)
 complex(kind((1.0d0,1.0d0))) :: achstemp,achxtemp,matngmatmgp,matngpmatmg,mygpvar1,mygpvar2,schstemp,schs,sch,ssx,ssxt,scht
 complex(kind((1.0d0,1.0d0))), allocatable :: aqsmtemp(:,:), aqsntemp(:,:), I_epsR_array(:,:,:), I_epsA_array(:,:,:),matngmatmgpD(:,:),matngpmatmgD(:,:),dFreqBrd(:)
@@ -392,12 +394,14 @@ time_chc = 0D0
 ! JRD: Now do CH term
           
 !         ALLOCATE(schDt_array(nFreq),schDt_matrix(nFreq,))
+!         schDt_array(:) = 0D0
 
         call timget(starttime_ch)
  
 !         schdt_array = 0D0
 !$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig,schDtt,I_epsRggp_int, &
-!$OMP                      I_epsAggp_int,schD,schDt,ifreq)
+!$OMP                      I_epsAggp_int,schD,schDt,ifreq,igbeg,igend,  &
+!$OMP                      n1_beg,n1_end,my_igp_beg,my_igp_end,cblk) 
 
 ! The following omp directive is in error.  There is not a reduction on schdt_array with
 ! respect to the omp loop, in this case the ifreq loop.  Each omp iteration has a unique
@@ -405,40 +409,59 @@ time_chc = 0D0
 ! ! ! !$OMP                      I_epsAggp_int,schD,schDt,ifreq) reduction(+:schdt_array)
         do ifreq=1,nFreq
 
-!             schDt = (0D0,0D0)
+          igmax=ncouls
+          !  Wichmann:  This is the driver loop for the cache blocked ig loop.
+          !  The ig will be vectorized and the loads for the 2 I_eps* arrays
+          !  and the 1 aqsntemp array will dominate performance.
+          !  Blocking ig helps protect against large values for ncouls blowing out caches.
+          !  igblk=512 seems like a good value for XEON, but it should be re-evaluated
+          !  on other platforms when available.
+          do igbeg = 1,igmax,igblk
+            igend = min(igbeg+igblk-1,igmax)
+            cblk=8
+            ! Wichmann:  Below we cache block both the my_igp and n1 loops.
+            ! This blocking allows us to get excellent reuse of both
+            ! of the I_eps* arrays and the aqsntemp array.  We reuse 
+            ! an igblk's worth of I_eps cblk times before pulling in a new block
+            ! of data.  Since my_igp is also blocked, we then get reuse of aqsntemp array.
+            !  cblk = 8 seems pretty good for XEON, but it should be re-evaluated on other 
+            ! platforms.  Also, the block size does not have to be equal for both loops.
+            do my_igp_beg = 1, ngpown,cblk
+              my_igp_end = min(my_igp_beg+cblk-1,ngpown)
+              do n1_beg=1,number_bands,cblk
+                n1_end = min(n1_beg+cblk-1,number_bands)
+!dir$ no interchange,noblocking
+              do my_igp = my_igp_beg,my_igp_end
+                do n1=n1_beg,n1_end
+                indigp = inv_igp_index(my_igp)
+                igp = indinv(indigp)
 
-            do my_igp = 1, ngpown
-              indigp = inv_igp_index(my_igp)
-              igp = indinv(indigp)
+                if (igp .gt. ncouls .or. igp .le. 0) cycle
 
-              if (igp .gt. ncouls .or. igp .le. 0) cycle
 
-              igmax=ncouls
+  ! JRD: The below loop is performance critical
 
-! JRD: The below loop is performance critical
+                schDtt = (0D0,0D0)
+                do ig = igbeg, igend
+  !               do ig = 1, igmax
 
-      do n1=1,number_bands
-              schDtt = (0D0,0D0)
-              do ig = 1, igmax
+                  I_epsRggp_int = I_epsR_array(ig,my_igp,ifreq)
 
-                I_epsRggp_int = I_epsR_array(ig,my_igp,ifreq)
+                  I_epsAggp_int = I_epsA_array(ig,my_igp,ifreq)
 
-                I_epsAggp_int = I_epsA_array(ig,my_igp,ifreq)
+                  ! for G,G` components
+                  schD=I_epsRggp_int-I_epsAggp_int
 
-                ! for G,G` components
-                schD=I_epsRggp_int-I_epsAggp_int
-
-                ! for G`,G components
-                schDtt = schDtt +aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*schD
+                  ! for G`,G components
+                  schDtt = schDtt +aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*schD
+                enddo
+                !schDt = schDt + schDtt * vcoul(igp)
+                schdt_matrix(ifreq,n1) = schdt_matrix(ifreq,n1) + schDtt
               enddo
-              !schDt = schDt + schDtt * vcoul(igp)
-              schdt_matrix(ifreq,n1) = schdt_matrix(ifreq,n1) + schDtt
-      enddo
             enddo
-
-! XXX: Threads could be stomping on each-other`s cache over this... try reduction?
-!            schdt_array(ifreq) = schdt_array(ifreq) + schDt
-
+              enddo
+            enddo
+          enddo
         enddo
 !$OMP END PARALLEL DO
 
@@ -457,18 +480,18 @@ time_chc = 0D0
 !$OMP PARALLEL do private (ifreq,schDt,cedifft_zb,cedifft_coh,cedifft_cor, &
 !$OMP                      cedifft_zb_right,cedifft_zb_left,schDt_right,schDt_left, &
 !$OMP                      schDt_avg,schDt_lin,schDt_lin2,intfact,iw, &
-!$OMP                      schDt_lin3) reduction(+:schDi,schDi_corb,schDi_cor,sch2Di)
+!$OMP                      schDt_lin3) reduction(+:schDi,schDi_corb,schDi_cor,sch2Di) 
         do ifreq=1,nFreq
 
             schDt = schdt_matrix(ifreq,n1)
 
             cedifft_zb = dFreqGrid(ifreq)
-            cedifft_coh = CMPLX(cedifft_zb,0D0)- dFreqBrd(ifreq)
+            cedifft_coh = DCMPLX(cedifft_zb,0D0)- dFreqBrd(ifreq)
 
             if( flag_occ) then 
-              cedifft_cor = -1.0d0*CMPLX(cedifft_zb,0D0) - dFreqBrd(ifreq)
+              cedifft_cor = -1.0d0*DCMPLX(cedifft_zb,0D0) - dFreqBrd(ifreq)
             else
-              cedifft_cor = CMPLX(cedifft_zb,0D0) - dFreqBrd(ifreq)
+              cedifft_cor = DCMPLX(cedifft_zb,0D0) - dFreqBrd(ifreq)
             endif
 
             if (ifreq .ne. 1) then 
@@ -485,8 +508,8 @@ time_chc = 0D0
             if (ifreq .ne. nFreq) then
               do iw = 1, nfreqeval
                 wx = freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep
-                schDi(iw) = schDi(iw) - CMPLX(0.d0,pref(ifreq)) * schDt / ( wx-cedifft_coh)
-                schDi_corb(iw) = schDi_corb(iw) - CMPLX(0.d0,pref(ifreq)) * schDt / ( wx-cedifft_cor)
+                schDi(iw) = schDi(iw) - DCMPLX(0.d0,pref(ifreq)) * schDt / ( wx-cedifft_coh)
+                schDi_corb(iw) = schDi_corb(iw) - DCMPLX(0.d0,pref(ifreq)) * schDt / ( wx-cedifft_cor)
               enddo
             endif
             if (ifreq .ne. 1) then
@@ -496,7 +519,7 @@ time_chc = 0D0
                 if (intfact .lt. 1d-4) intfact = 1d-4
                 if (intfact .gt. 1d4) intfact = 1d4
                 intfact = -log(intfact)
-                sch2Di(iw) = sch2Di(iw) - CMPLX(0.d0,pref_zb) * schDt_avg * intfact
+                sch2Di(iw) = sch2Di(iw) - DCMPLX(0.d0,pref_zb) * schDt_avg * intfact
 !These lines are for sigma4
                 if (flag_occ) then
                   intfact=abs((freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep+cedifft_zb_right)/(freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep+cedifft_zb_left))
@@ -508,7 +531,7 @@ time_chc = 0D0
                   schDt_lin3 = (schDt_left + schDt_lin2*(freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep-cedifft_zb_left))*intfact
                 endif
                 schDt_lin3 = schDt_lin3 + schDt_lin
-                schDi_cor(iw) = schDi_cor(iw) - CMPLX(0.d0,pref_zb) * schDt_lin3
+                schDi_cor(iw) = schDi_cor(iw) - DCMPLX(0.d0,pref_zb) * schDt_lin3
               enddo
             endif
         enddo
@@ -524,6 +547,10 @@ time_chc = 0D0
 
 ! JRD: This can be often (but not always) small, so we don't thread over it. Maybe smarter to dynamically whether to thread this loop
 ! or below loop, or just use OpenMP nested loop support
+
+!$OMP PARALLEL do if(nfreqeval>=ngpown.or.nfreqeval>=3*OMP_GET_NUM_THREADS()) &
+!$OMP                      private (my_igp,igp,indigp,igmax,ig, &
+!$OMP                      sch2Dt,sch2Dtt,schDttt,schDttt_cor,iw,wx,ifreq,ijk,fact1,fact2) 
         do iw = 1, nfreqeval
           wx = freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep
           if(wx .ge. 0.0d0) then
@@ -608,6 +635,7 @@ time_chc = 0D0
             schDi_cor(iw) = schDi_cor(iw) + schDttt_cor
           endif
         enddo
+! !$OMP END PARALLEL DO
 
         call timget(endtime_ch)
         time_chc = time_chc + endtime_ch - starttime_ch
