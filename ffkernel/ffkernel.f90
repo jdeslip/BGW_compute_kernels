@@ -32,7 +32,7 @@ complex(kind((1.0d0,1.0d0))) :: schD,achsDtemp,schsDtemp
 complex(kind((1.0d0,1.0d0))), allocatable :: asxDtemp(:),achDtemp(:),ach2Dtemp(:),achDtemp_cor(:),achDtemp_corb(:)
 complex(kind((1.0d0,1.0d0))), allocatable :: schDi(:),schDi_cor(:),schDi_corb(:),sch2Di(:),ssxDi(:)
 complex(kind((1.0d0,1.0d0))) :: ssxDit,ssxDitt,ssxDittt,schDt,schDtt,sch2dt,sch2dtt,I_epsRggp_int, I_epsAggp_int
-complex(kind((1.0d0,1.0d0))), allocatable :: schDt_array(:)
+complex(kind((1.0d0,1.0d0))), allocatable :: schDt_array(:),schDt_matrix(:,:)
 complex(kind((1.0d0,1.0d0))) :: schDttt,schDttt_cor
 complex(kind((1.0d0,1.0d0))) :: schDt_avg, schDt_right, schDt_left, schDt_lin, schDt_lin2, schDt_lin3
 complex(kind((1.0d0,1.0d0))) :: cedifft_coh,cedifft_cor
@@ -84,6 +84,13 @@ time_chc = 0D0
       READ(arg,*) nFreq
       CALL getarg(6, arg)
       READ(arg,*) nfreqeval
+      
+      write(6,*)"number_bands = ",number_bands
+      write(6,*)"nvband       = ",nvband
+      write(6,*)"ncouls       = ",ncouls
+      write(6,*)"ngpown       = ",ngpown  ! this is also the mpi level parallel
+      write(6,*)"nFreq        = ",nFreq
+      write(6,*)"nfreqeval    = ",nfreqeval
 
 ! ngpown = ncouls / (number of mpi tasks)
 
@@ -105,16 +112,19 @@ time_chc = 0D0
         dw = dw + 1D0
       enddo
 
+      write(6,*)"allocating aqs*temp, size = ",2*ncouls*number_bands*16/1024," kbytes"
       ALLOCATE(aqsntemp(ncouls,number_bands))
       ALLOCATE(aqsmtemp(ncouls,number_bands))
       aqsmtemp = (0.5D0,0.5D0)
       aqsntemp = (0.5D0,0.5D0)
 
+      write(6,*)"allocating I_eps*_array, size = ",((2.0*ncouls)*ngpown*nFreq*16)/1024**2," Mbytes"
       ALLOCATE(I_epsR_array(ncouls,ngpown,nFreq))
       I_epsR_array = (0.5D0,0.5D0)
       ALLOCATE(I_epsA_array(ncouls,ngpown,nFreq))
       I_epsA_array = (0.5D0,-0.5D0)
 
+      write(6,*)"allocating matn*, size = ",2*ncouls*ngpown*16/1024," kbytes"
       ALLOCATE(matngmatmgpD(ncouls,ngpown))
       ALLOCATE(matngpmatmgD(ncouls,ngpown))
 
@@ -165,6 +175,8 @@ time_chc = 0D0
 
       ALLOCATE(wxi(nfreqeval))
       wxi=0D0
+      ALLOCATE(schDt_matrix(nFreq,number_bands))
+      schDt_matrix = 0.
 
       do ig = 1, ngpown
         inv_igp_index(ig) = ig
@@ -208,31 +220,32 @@ time_chc = 0D0
 
         iwlda = 1
 
-        do iw=1,nfreqeval
-          wx = freqevalmin - e_n1kq + (iw-1)*freqevalstep
-          wxi(iw) = wx
-        enddo
+!         do iw=1,nfreqeval
+!           wx = freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep
+!           wxi(iw) = wx
+!         enddo
 
 ! JRD compute the static CH for the static remainder
 
         call timget(starttime_stat)
 
-!$OMP PARALLEL do private (my_igp,igp,indigp,igmax,mygpvar1,ig)
-        do my_igp = 1, ngpown
-          indigp = inv_igp_index(my_igp)
-          igp = indinv(indigp)
-
-          if (igp .gt. ncouls .or. igp .le. 0) cycle
-
-          igmax=ncouls
-
-          mygpvar1 = CONJG(aqsmtemp(igp,n1))
-
-          do ig = 1, igmax
-            matngmatmgpD(ig,my_igp) = aqsntemp(ig,n1) * mygpvar1
-          enddo
-        enddo
-!$OMP END PARALLEL DO
+! !$OMP PARALLEL do private (my_igp,igp,indigp,igmax,mygpvar1,ig)
+!         do my_igp = 1, ngpown
+!           indigp = inv_igp_index(my_igp)
+!           igp = indinv(indigp)
+! 
+!           if (igp .gt. ncouls .or. igp .le. 0) cycle
+! 
+!           igmax=ncouls
+! 
+!           mygpvar1 = CONJG(aqsmtemp(igp,n1))
+! 
+!           do ig = 1, igmax
+!             matngmatmgpD(ig,my_igp) = aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))
+! !             matngmatmgpD(ig,my_igp) = aqsntemp(ig,n1) * mygpvar1
+!           enddo
+!         enddo
+! !$OMP END PARALLEL DO
 
         !if (exact_ch.eq.1) then
 !$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig, &
@@ -247,7 +260,7 @@ time_chc = 0D0
 
             schsDtemp = 0D0
             do ig = 1, igmax
-              schsDtemp = schsDtemp-matngmatmgpD(ig,my_igp)*I_epsR_array(ig,my_igp,1)
+              schsDtemp = schsDtemp-aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*I_epsR_array(ig,my_igp,1)
             enddo
             achsDtemp = achsDtemp + schsDtemp*vcoul(igp)*0.5D0
           enddo
@@ -258,17 +271,13 @@ time_chc = 0D0
         time_stat = time_stat + endtime_stat - starttime_stat
 
         ssxDi = (0D0,0D0)
-        schDi = (0D0,0D0)
-        schDi_cor = (0D0,0D0)
-        schDi_corb = (0D0,0D0)
-        sch2Di = (0D0,0D0)
 
         call timget(starttime_sx)
 
 ! JRD: Don`t want to thread here, nfreqeval could be small
         do iw=1,nfreqeval
             
-          wx = wxi(iw)
+          wx = freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep
 
 ! SX and CH terms: equation (1.42) of Catalin`s thesis
 ! Note the negative sign in I_epsRggp and I_epsAggp
@@ -329,7 +338,7 @@ time_chc = 0D0
                   !ssxDit=I_epsR_array(ifreq,ig,my_igp)*fact1 + &
                   !I_epsR_array(ifreq+1,ig,my_igp)*fact2 
  
-                  ssxDitt = ssxDitt + matngmatmgpD(ig,my_igp)*ssxDit
+                  ssxDitt = ssxDitt + aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*ssxDit
                 enddo
                 ssxDittt = ssxDittt + ssxDitt*vcoul(igp)
               enddo
@@ -361,7 +370,7 @@ time_chc = 0D0
                   !ssxDit=I_epsA_array(ifreq,ig,my_igp)*fact1+ &
                   !  I_epsA_array(ifreq+1,ig,my_igp)*fact2
 
-                  ssxDitt = ssxDitt + matngmatmgpD(ig,my_igp)*ssxDit
+                  ssxDitt = ssxDitt + aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*ssxDit
                 enddo
                 ssxDittt = ssxDittt + ssxDitt*vcoul(igp)
               enddo                
@@ -371,24 +380,36 @@ time_chc = 0D0
 
             endif
           endif
+          if (flag_occ) then
+            asxDtemp(iw) = asxDtemp(iw) + ssxDi(iw)*occ
+          endif
         enddo
 
         call timget(endtime_sx)
         time_sx = time_sx + endtime_sx - starttime_sx
+      enddo
 
 ! JRD: Now do CH term
           
-        ALLOCATE(schDt_array(nFreq))
-        schDt_array(:) = 0D0
+!         ALLOCATE(schDt_array(nFreq),schDt_matrix(nFreq,))
+!         schDt_array(:) = 0D0
 
         call timget(starttime_ch)
  
-        schdt_array = 0D0
+!         schdt_array = 0D0
 !$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig,schDtt,I_epsRggp_int, &
-!$OMP                      I_epsAggp_int,schD,schDt,ifreq) reduction(+:schdt_array)
+!$OMP                      I_epsAggp_int,schD,schDt,ifreq) 
+
+! The following omp directive is in error.  There is not a reduction on schdt_array with
+! respect to the omp loop, in this case the ifreq loop.  Each omp iteration has a unique
+! location so it is not a reduction.
+! ! ! !$OMP                      I_epsAggp_int,schD,schDt,ifreq) reduction(+:schdt_array)
         do ifreq=1,nFreq
 
-            schDt = (0D0,0D0)
+!             schDt = (0D0,0D0)
+      do n1=1,number_bands
+        flag_occ = (n1.le.nvband)
+        occ = 1.0d0
 
             do my_igp = 1, ngpown
               indigp = inv_igp_index(my_igp)
@@ -411,21 +432,30 @@ time_chc = 0D0
                 schD=I_epsRggp_int-I_epsAggp_int
 
                 ! for G`,G components
-                schDtt = schDtt + matngmatmgpD(ig,my_igp)*schD
+                schDtt = schDtt +aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*schD
               enddo
               !schDt = schDt + schDtt * vcoul(igp)
-              schdt_array(ifreq) = schdt_array(ifreq) + schDtt
+              schdt_matrix(ifreq,n1) = schdt_matrix(ifreq,n1) + schDtt
             enddo
 
 ! XXX: Threads could be stomping on each-other`s cache over this... try reduction?
 !            schdt_array(ifreq) = schdt_array(ifreq) + schDt
+      enddo
 
         enddo
 !$OMP END PARALLEL DO
 
         call timget(endtime_ch)
         time_cha = time_cha + endtime_ch - starttime_ch
+
+      do n1=1,number_bands
+        flag_occ = (n1.le.nvband)
+        occ = 1.0d0
         call timget(starttime_ch)
+        schDi = (0D0,0D0)
+        schDi_cor = (0D0,0D0)
+        schDi_corb = (0D0,0D0)
+        sch2Di = (0D0,0D0)
 
 !$OMP PARALLEL do private (ifreq,schDt,cedifft_zb,cedifft_coh,cedifft_cor, &
 !$OMP                      cedifft_zb_right,cedifft_zb_left,schDt_right,schDt_left, &
@@ -433,7 +463,7 @@ time_chc = 0D0
 !$OMP                      schDt_lin3) reduction(+:schDi,schDi_corb,schDi_cor,sch2Di) 
         do ifreq=1,nFreq
 
-            schDt = schDt_array(ifreq)
+            schDt = schdt_matrix(ifreq,n1)
 
             cedifft_zb = dFreqGrid(ifreq)
             cedifft_coh = CMPLX(cedifft_zb,0D0)- dFreqBrd(ifreq)
@@ -448,7 +478,7 @@ time_chc = 0D0
               cedifft_zb_right = cedifft_zb
               cedifft_zb_left = dFreqGrid(ifreq-1)
               schDt_right = schDt
-              schDt_left = schDt_array(ifreq-1)
+              schDt_left = schdt_matrix(ifreq-1,n1)
               schDt_avg = 0.5D0 * ( schDt_right + schDt_left )
               schDt_lin = schDt_right - schDt_left
               schDt_lin2 = schDt_lin/(cedifft_zb_right-cedifft_zb_left)
@@ -456,26 +486,29 @@ time_chc = 0D0
 
 ! The below two lines are for sigma1 and sigma3
             if (ifreq .ne. nFreq) then
-              schDi(:) = schDi(:) - CMPLX(0.d0,pref(ifreq)) * schDt / ( wxi(:)-cedifft_coh)
-              schDi_corb(:) = schDi_corb(:) - CMPLX(0.d0,pref(ifreq)) * schDt / ( wxi(:)-cedifft_cor)
+              do iw = 1, nfreqeval
+                wx = freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep
+                schDi(iw) = schDi(iw) - CMPLX(0.d0,pref(ifreq)) * schDt / ( wx-cedifft_coh)
+                schDi_corb(iw) = schDi_corb(iw) - CMPLX(0.d0,pref(ifreq)) * schDt / ( wx-cedifft_cor)
+              enddo
             endif
             if (ifreq .ne. 1) then
               do iw = 1, nfreqeval
 !These lines are for sigma2
-                intfact=abs((wxi(iw)-cedifft_zb_right)/(wxi(iw)-cedifft_zb_left))
+                intfact=abs((freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep-cedifft_zb_right)/(freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep-cedifft_zb_left))
                 if (intfact .lt. 1d-4) intfact = 1d-4
                 if (intfact .gt. 1d4) intfact = 1d4
                 intfact = -log(intfact)
                 sch2Di(iw) = sch2Di(iw) - CMPLX(0.d0,pref_zb) * schDt_avg * intfact
 !These lines are for sigma4
                 if (flag_occ) then
-                  intfact=abs((wxi(iw)+cedifft_zb_right)/(wxi(iw)+cedifft_zb_left))
+                  intfact=abs((freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep+cedifft_zb_right)/(freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep+cedifft_zb_left))
                   if (intfact .lt. 1d-4) intfact = 1d-4
                   if (intfact .gt. 1d4) intfact = 1d4
                   intfact = log(intfact)
-                  schDt_lin3 = (schDt_left + schDt_lin2*(-wxi(iw)-cedifft_zb_left))*intfact
+                  schDt_lin3 = (schDt_left + schDt_lin2*(-freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep-cedifft_zb_left))*intfact
                 else 
-                  schDt_lin3 = (schDt_left + schDt_lin2*(wxi(iw)-cedifft_zb_left))*intfact
+                  schDt_lin3 = (schDt_left + schDt_lin2*(freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep-cedifft_zb_left))*intfact
                 endif
                 schDt_lin3 = schDt_lin3 + schDt_lin
                 schDi_cor(iw) = schDi_cor(iw) - CMPLX(0.d0,pref_zb) * schDt_lin3
@@ -484,7 +517,7 @@ time_chc = 0D0
         enddo
 !$OMP END PARALLEL DO
 
-        DEALLOCATE(schDt_array)
+!         DEALLOCATE(schDt_array)
 
 ! JRD: Compute Sigma2 and Sigma4 delta function contributions
 
@@ -495,7 +528,7 @@ time_chc = 0D0
 ! JRD: This can be often (but not always) small, so we don't thread over it. Maybe smarter to dynamically whether to thread this loop
 ! or below loop, or just use OpenMP nested loop support
         do iw = 1, nfreqeval
-          wx = wxi(iw)
+          wx = freqevalmin - ekq(n1,1) + (iw-1)*freqevalstep
           if(wx .ge. 0.0d0) then
             ifreq=0
             do ijk = 1, nFreq-1
@@ -513,7 +546,7 @@ time_chc = 0D0
             schDttt = 0D0
             schDttt_cor = 0D0
 
-!$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig,fact1,fact2, &
+!$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig, &
 !$OMP                      sch2Dt,sch2Dtt) reduction(+:schDttt,schDttt_cor) 
             do my_igp = 1, ngpown
               indigp = inv_igp_index(my_igp)
@@ -527,7 +560,7 @@ time_chc = 0D0
               do ig = 1, igmax
                 sch2Dt=(I_epsR_array(ig,my_igp,ifreq)-I_epsA_array(ig,my_igp,ifreq))*fact1 + &
                        (I_epsR_array(ig,my_igp,ifreq+1)-I_epsA_array(ig,my_igp,ifreq+1))*fact2
-                sch2Dtt = sch2Dtt + matngmatmgpD(ig,my_igp)*sch2Dt
+                sch2Dtt = sch2Dtt + aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*sch2Dt
               enddo
               schDttt = schDttt + sch2Dtt*vcoul(igp)
               if (flag_occ) then
@@ -556,7 +589,7 @@ time_chc = 0D0
 
             schDttt_cor = 0D0
 
-!$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig,fact1,fact2, &
+!$OMP PARALLEL do private (my_igp,igp,indigp,igmax,ig, &
 !$OMP                      sch2Dt,sch2Dtt) reduction(+:schDttt_cor) 
             do my_igp = 1, ngpown
               indigp = inv_igp_index(my_igp)
@@ -570,7 +603,7 @@ time_chc = 0D0
               do ig = 1, igmax
                 sch2Dt=-0.5D0*((I_epsR_array(ig,my_igp,ifreq)-I_epsA_array(ig,my_igp,ifreq))*fact1 + &
                        (I_epsR_array(ig,my_igp,ifreq+1)-I_epsA_array(ig,my_igp,ifreq+1))*fact2)
-                sch2Dtt = sch2Dtt + matngmatmgpD(ig,my_igp)*sch2Dt
+                sch2Dtt = sch2Dtt + aqsntemp(ig,n1) * CONJG(aqsmtemp(igp,n1))*sch2Dt
               enddo
               schDttt_cor = schDttt_cor + sch2Dtt*vcoul(igp)
             enddo
@@ -584,9 +617,9 @@ time_chc = 0D0
 
         do iw = 1, nfreqeval
             
-          if (flag_occ) then
-            asxDtemp(iw) = asxDtemp(iw) + ssxDi(iw)*occ
-          endif
+!           if (flag_occ) then
+!             asxDtemp(iw) = asxDtemp(iw) + ssxDi(iw)*occ
+!           endif
             
           achDtemp(iw) = achDtemp(iw) + schDi(iw)
           achDtemp_cor(iw) = achDtemp_cor(iw) + schDi_cor(iw)
@@ -619,6 +652,8 @@ time_chc = 0D0
       DEALLOCATE(wxi)
       DEALLOCATE(dFreqBrd)
       DEALLOCATE(dFreqGrid)
+      DEALLOCATE(schDt_matrix)
+      
 
       write(6,*) "Runtime:", endtime-starttime
       write(6,*) "Runtime STAT:", time_stat

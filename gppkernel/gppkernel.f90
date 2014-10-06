@@ -4,11 +4,11 @@
 !
 ! Run like:
 !
-!  gppkernel.x <number_bands> <number_valence_bands> <number_plane_waves> <number_plane_waves_per_mpi_task>
+!  gppkernel.x <number_bands> <number_valence_bands> <number_plane_waves> <nodes_per_mpi_group> <gppsum>
 !
 ! Example run:
 !
-!  gppkernel.x 8 2 10000 600
+!  gppkernel.x 8 2 10000 20
 !
 !==============================================================================================
 
@@ -21,8 +21,11 @@ program gppkernel
       integer :: n1
       integer :: ispin, iw
       integer :: number_bands,nvband,ncouls,ngpown
+      integer :: nodes_per_group
       integer :: nstart, nend
-      integer :: my_igp, indigp, ig, igp, igmax
+      integer :: my_igp, indigp, ig, igp, igmax,igbeg,igend
+      !integer,parameter:: igblk=512
+      integer,parameter:: igblk=512000
       integer :: ggpsum
       integer, allocatable :: indinv(:), inv_igp_index(:)
       complex(kind((1.0d0,1.0d0))) :: achstemp,achxtemp,matngmatmgp,matngpmatmg,wdiff,mygpvar1,mygpvar2,schstemp,schs,wx_array(3),sch,ssx,ssxt,scht
@@ -30,6 +33,8 @@ program gppkernel
       complex(kind((1.0d0,1.0d0))), allocatable :: aqsmtemp(:,:), aqsntemp(:,:), I_eps_array(:,:), acht_n1_loc(:)
       complex(kind((1.0d0,1.0d0))), allocatable :: asxtemp(:),achtemp(:),ssx_array(:),sch_array(:),ssxa(:),scha(:),wtilde_array(:,:)
       complex(kind((1.0d0,1.0d0))) :: delw, cden
+      complex(kind((1.0d0,1.0d0))) :: scha_temp
+      real(kind(1.0d0)) :: scha_mult
       real(kind(1.0d0)) :: e_n1kq, e_lk, dw, delwr, wdiffr
       real(kind(1.0d0)) :: tol, gamma, sexcut
       real(kind(1.0d0)) :: wx,occ,occfact,tempval
@@ -43,39 +48,65 @@ program gppkernel
       real(kind(1.0d0)) :: time_dyn
       logical :: flag_occ
       CHARACTER(len=32) :: arg
-
+      integer npes,mype,ierr
+      include 'mpif.h'
+      
+      call mpi_init(ierr)
+      
+      ! Initialize MPI on the node. npes is number of ranks per node
+      call mpi_comm_size(mpi_comm_world,npes,ierr)
+      call mpi_comm_rank(mpi_comm_world,mype,ierr)
+            
       time_stat = 0D0
       time_dyn = 0D0
 
 !$OMP PARALLEL PRIVATE(NTHREADS, TID)
       TID = OMP_GET_THREAD_NUM()
-      IF (TID .EQ. 0) THEN
+      IF (TID .EQ. 0 .and. mype==0) THEN
         NTHREADS = OMP_GET_NUM_THREADS()
         PRINT *, 'Number of threads = ', NTHREADS
+        write(6,*) "Number of ranks per node = ",npes
       END IF
 !$OMP END PARALLEL
 
 ! We start off in the body of loop over the various tasks. Each MPI task has communicated data it owns to everyone
 
 ! These should be read in
+      if(mype == 0)then 
+        CALL getarg(1, arg)
+        READ(arg,*) number_bands
+        CALL getarg(2, arg)
+        READ(arg,*) nvband
+        CALL getarg(3, arg)
+        READ(arg,*) ncouls
+        CALL getarg(4, arg)
+        READ(arg,*) nodes_per_group
+        CALL getarg(5, arg)
+        READ(arg,*) ggpsum
+      endif
 
-      CALL getarg(1, arg)
-      READ(arg,*) number_bands
-      CALL getarg(2, arg)
-      READ(arg,*) nvband
-      CALL getarg(3, arg)
-      READ(arg,*) ncouls
-      CALL getarg(4, arg)
-      READ(arg,*) ngpown
-
-! ngpown = ncouls / (number of mpi tasks)
-
+      ! ngpown is number of gvectors per mpi task
+      ngpown = ncouls / ( nodes_per_group * npes )
+      
+      call mpi_bcast(number_bands,1,mpi_integer,0,mpi_comm_world,ierr)
+      call mpi_bcast(nvband,      1,mpi_integer,0,mpi_comm_world,ierr)
+      call mpi_bcast(ncouls,      1,mpi_integer,0,mpi_comm_world,ierr)
+      call mpi_bcast(ngpown,      1,mpi_integer,0,mpi_comm_world,ierr)
+      
       e_lk = 10D0
       dw = 1D0
       nstart = 1
       nend = 3
-      ggpsum = 2
 
+      if(mype==0)then
+        write(6,*) "number_bands = ",number_bands
+        write(6,*) "nvband = ",nvband
+        write(6,*) "ncouls = igmax = ",ncouls
+        write(6,*) "ngpown = ",ngpown
+        write(6,*) "nend-nstart = ",nend-nstart
+        write(6,*) "ggpsum = ",ggpsum
+      endif
+      
       ALLOCATE(vcoul(ncouls))
       vcoul = 1D0
 
@@ -90,13 +121,16 @@ program gppkernel
 
       ALLOCATE(wtilde_array(ncouls,ngpown))
       wtilde_array = (0.5d0,0.5d0)
+      if(mype==0)write(6,*)"Size of wtilde_array = ",(ncouls*ngpown*2.0*8)/(1024**2)," Mbytes"
 
       ALLOCATE(aqsntemp(ncouls,number_bands))
+      if(mype==0)write(6,*)"Size of aqsntemp = ",(ncouls*number_bands*2.0*8)/1024**2," Mbytes"
       ALLOCATE(aqsmtemp(ncouls,number_bands))
       aqsmtemp = (0.5D0,0.5D0)
       aqsntemp = (0.5D0,0.5D0)
 
       ALLOCATE(I_eps_array(ncouls,ngpown))
+      if(mype==0)write(6,*)"Size of I_eps_array = ",(ncouls*ngpown*2.0*8)/1024**2," Mbytes"
       I_eps_array = (0.5D0,0.5D0)
 
       ALLOCATE(inv_igp_index(ngpown))
@@ -104,12 +138,15 @@ program gppkernel
 
       ALLOCATE(acht_n1_loc(number_bands))
 
+!       do ig = 1, ngpown
+!         inv_igp_index(ig) = ig
+!       enddo
+      !  assumes a better mpi work distribution for gppsum=1 case
       do ig = 1, ngpown
-        inv_igp_index(ig) = ig
+        inv_igp_index(ig) = ig * ncouls / ngpown
       enddo
 
-! Try this as identity and random
-! Identity for now
+! Try this identity and random
       do ig = 1, ncouls
         indinv(ig) = ig
       enddo
@@ -120,8 +157,11 @@ program gppkernel
       limitone=1D0/(tol*4D0)
       limittwo=0.5d0**2
 
-      write(6,*) "Starting loop"
-
+      if(mype==0)then
+        write(6,*) "Starting loop"
+      endif
+      
+      call mpi_barrier(mpi_comm_world,ierr)
       call timget(starttime)
 
       do n1=1,number_bands
@@ -151,7 +191,8 @@ program gppkernel
  
         !!!if (sig%exact_ch.eq.1) then
 !$OMP PARALLEL do private (my_igp,igp,indigp,igmax,mygpvar1,mygpvar2,ig,schs, &
-!$OMP                       matngmatmgp,matngpmatmg,schstemp) reduction(+:achstemp)
+!$OMP                       matngmatmgp,matngpmatmg,schstemp) reduction(+:achstemp) &
+!$OMP          schedule(dynamic)
           do my_igp = 1, ngpown
 
             ! This index could be bad
@@ -222,15 +263,14 @@ program gppkernel
 !$OMP PARALLEL private (my_igp,igp,indigp,igmax,mygpvar1,mygpvar2,ssx_array,sch_array,ig, &
 !$OMP                      wtilde,wtilde2,halfinvwtilde,ssxcutoff,matngmatmgp,matngpmatmg,sch,ssx, &
 !$OMP                      iw,delw,delw2,Omega2,scht,ssxt,wxt, &
-!$OMP                      rden,cden,ssxa,scha,delwr,wdiffr,occfact)
+!$OMP                      rden,cden,ssxa,scha,delwr,wdiffr,occfact,igend,igbeg)
 
         ALLOCATE(ssx_array(3))
         ALLOCATE(sch_array(3))
-
         ALLOCATE(ssxa(ncouls))
         ALLOCATE(scha(ncouls))
 
-!$OMP DO reduction(+:asxtemp,acht_n1_loc,achtemp)
+!$OMP DO reduction(+:asxtemp,acht_n1_loc,achtemp) schedule(dynamic)
         do my_igp = 1, ngpown
 
           indigp = inv_igp_index(my_igp)
@@ -364,9 +404,10 @@ program gppkernel
               sch_array(iw) = sch_array(iw) + 0.5D0*scht
 
             enddo
-
+            
           else
-
+            do igbeg = 1,igmax,igblk
+            igend = min(igbeg+igblk-1,igmax)
             do iw=nstart,nend
 
               scht=0D0
@@ -375,40 +416,47 @@ program gppkernel
 
               if (ggpsum.eq.1) then
 
-                do ig = 1, igmax
-
+                do ig = igbeg, min(igend,igmax -1)
                   wtilde = wtilde_array(ig,my_igp)
-
-! Cycle bad for vectorization. ggpsum=1 slow anyway
-                  if (abs((wtilde**2) * I_eps_array(ig,my_igp)) .lt. tol) cycle
-
+                  !if (abs((wtilde**2) * I_eps_array(ig,my_igp)) .lt. tol) cycle
                   matngmatmgp = aqsntemp(ig,n1) * mygpvar1
-! JRD: If statement breaks vectorization but gppsum=1 is slow anyway
-                  if (ig .ne. igp) matngpmatmg = CONJG(aqsmtemp(ig,n1)) * mygpvar2
-
-                  halfinvwtilde = 0.5d0/wtilde
-                  delw = (wx_array(iw) - wtilde) * halfinvwtilde
-                  delw2 = abs(delw)**2
-
-                  if (abs(wxt-wtilde).lt.gamma .or. delw2.lt.tol) then
-                    sch = 0.0d0
-                  else
-                    sch = wtilde_array(ig,my_igp) * I_eps_array(ig,my_igp) / (wxt - wtilde_array(ig,my_igp))
-                  endif
-
-                  if (ig .ne. igp) then
-                    scha(ig) = matngmatmgp*sch + matngpmatmg*CONJG(sch)
-                  else
-                    scha(ig) = matngmatmgp*sch
-                  endif
-
+                  wdiff = wxt - wtilde
+                  delw = wtilde / wdiff
+                  delw2 = delw*CONJG(delw)
+                  wdiffr = wdiff*CONJG(wdiff)
+                  scha_mult = merge(1.0,0.0,wdiffr.lt.limittwo .or. delw2.gt.limitone)
+                  sch = delw * I_eps_array(ig,my_igp) * scha_mult
+!                   if (wdiffr.lt.limittwo .or. delw2.gt.limitone) then
+!                     sch = 0.0d0
+!                   else
+!                     sch = delw * I_eps_array(ig,my_igp)
+!                   endif
+!                   if (ig .ne. igp) then  ! ig.ne.igp only at ig=igmax.  We pealed that iteration and eliminated the if.
+                    scha(ig) = matngmatmgp*sch + CONJG(aqsmtemp(ig,n1)) * mygpvar2*CONJG(sch)
+!                   else
+!                     scha(ig) = matngmatmgp*sch
+!                   endif
                   scht = scht + scha(ig)
-
                 enddo ! loop over g
+                if(igend==igmax-1)then
+                  ig = igmax  ! this is the last iteration pealed 
+                  wtilde = wtilde_array(ig,my_igp)
+                  !if (abs((wtilde**2) * I_eps_array(ig,my_igp)) .lt. tol) cycle
+                  matngmatmgp = aqsntemp(ig,n1) * mygpvar1
+                  wdiff = wxt - wtilde
+                  delw = wtilde / wdiff
+                  delw2 = delw*CONJG(delw)
+                  wdiffr = wdiff*CONJG(wdiff)
+                  scha_mult = merge(1.0,0.0,wdiffr.lt.limittwo .or. delw2.gt.limitone)
+                  sch = delw * I_eps_array(ig,my_igp) * scha_mult
+                  scha(ig) = matngmatmgp*sch
+                  scht = scht + scha(ig)
+                endif
 
               else
-
-                do ig = 1, igmax
+! !dir$ no unroll
+                do ig = igbeg, min(igend,igmax)
+!                 do ig = 1, igmax
 
                   wdiff = wxt - wtilde_array(ig,my_igp)
 
@@ -421,11 +469,15 @@ program gppkernel
 
 ! JRD: Complex division is hard to vectorize. So, we help the compiler.
                   scha(ig) = mygpvar1 * aqsntemp(ig,n1) * delw * I_eps_array(ig,my_igp)
-
+!                   scha_temp = mygpvar1 * aqsntemp(ig,n1) * delw * I_eps_array(ig,my_igp)
+                  
 ! JRD: This if is OK for vectorization
-                  if (wdiffr.gt.limittwo .and. delwr.lt.limitone) then
-                    scht = scht + scha(ig)
-                  endif
+                   if (wdiffr.gt.limittwo .and. delwr.lt.limitone) then
+                     scht = scht + scha(ig)
+                   endif
+
+!                  scha_mult = merge(1.0,0.0,wdiffr.gt.limittwo .and. delwr.lt.limitone)                  
+!                  scht = scht + scha(ig)*scha_mult
 
                 enddo ! loop over g
 
@@ -437,6 +489,7 @@ program gppkernel
 ! JRD: Compute GPP Error...
 ! GPP Model Error Estimate
 
+            enddo
             enddo
 
           endif
@@ -466,10 +519,12 @@ program gppkernel
         DEALLOCATE(scha)
 
 !$OMP END PARALLEL
+
         call timget(endtime_dyn)
         time_dyn = time_dyn + endtime_dyn - starttime_dyn
 
       enddo ! over ipe bands (n1)
+      call mpi_barrier(mpi_comm_world,ierr)
 
       call timget(endtime)
 
@@ -482,14 +537,17 @@ program gppkernel
       DEALLOCATE(acht_n1_loc)
       DEALLOCATE(wtilde_array)
       DEALLOCATE(ekq)
-
-      write(6,*) "Runtime:", endtime-starttime
-      write(6,*) "Runtime Stat:", time_stat
-      write(6,*) "Runtime Dyn:", time_dyn
-      write(6,*) "Answer:",achtemp(2)
+      
+      if(mype==0)then
+        write(6,*) "Runtime:", endtime-starttime
+        write(6,*) "Runtime Stat:", time_stat
+        write(6,*) "Runtime Dyn:", time_dyn
+        write(6,*) "Answer:",achtemp(2)
+      endif
 
       DEALLOCATE(achtemp)
       DEALLOCATE(asxtemp)
+      call mpi_finalize(ierr)
 
 end program
 
@@ -501,6 +559,5 @@ subroutine timget(wall)
   call date_and_time(VALUES=values)
   wall=((values(3)*24.0d0+values(5))*60.0d0 &
     +values(6))*60.0d0+values(7)+values(8)*1.0d-3
-
   return
 end subroutine timget
