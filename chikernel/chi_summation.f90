@@ -6,6 +6,7 @@
 
 program chi_summation
 
+  use mpi
   use blas_m
   use timing_m
 
@@ -13,7 +14,7 @@ program chi_summation
 
     integer :: icurr,ntot,ntot2,itot,ifreq_para
     integer :: ipe, ilimit, jj, iv, irk, it, ispin,im,mytot
-    integer :: i_myband,grp_mtxel_start,tmp_iv,im_proc
+    integer :: i_myband,grp_mtxel_start,tmp_iv,im_proc,nodes,total_tasks,sqrt_total_tasks
     complex(kind((1.0d0,1.0d0))) :: negfact,tmp(2,2)
     real(kind(1.0d0)) :: zvalue
     integer, allocatable :: tmprowindex(:),tmpcolindex(:)
@@ -30,7 +31,7 @@ program chi_summation
     integer :: nfreq,nrk,nval,ncond,os_para_freqs,os_nfreq_para,&
                nspin,ifreq,nthreads,ic,npes,inode,tid,ig,ik,&
                OMP_GET_NUM_THREADS, OMP_GET_THREAD_NUM,narg,nprc_nmtx,&
-               ncount,ii
+               nmtx,ncount,ii,mpierr,nrank_per_node
     real(kind(1.0d0)) :: cond_en, val_en,tsec(2)
     integer, allocatable :: nst(:),indt(:,:,:)
     complex(kind((1.0d0,1.0d0))), allocatable :: pht(:,:,:),gme(:,:,:,:,:,:),dFreqBrd(:)
@@ -74,21 +75,40 @@ program chi_summation
     ! Here's where we read in and assign all the variables that will be 
     ! needed for the computation. Borrowed heavily from BSE kernel of 
     ! FHJ. 
-    write(6,*)
-    write(6,*) 'BerkeleyGW - Kernel for the chi summation'
-    write(6,*) '==========================================================='
-    write(6,*)
+
+    ! Let's start up MPI
+
+    inode = 0
+    call MPI_Init(mpierr)
+    if(mpierr .ne. MPI_SUCCESS) then
+      write(0,'(a)') 'ERROR: MPI initialization failed!'
+      stop 999
+    endif
+    call MPI_Comm_size(MPI_COMM_WORLD, npes, mpierr)
+    call MPI_Comm_rank(MPI_COMM_WORLD, inode, mpierr)
+
+    if ( inode .eq. 0 ) then
+      write(6,*)
+      write(6,*) 'BerkeleyGW - Kernel for the chi summation'
+      write(6,*) '==========================================================='
+      write(6,*)
+    endif
+
     narg = iargc()
-    if (narg/=5) then
-      write(0,*) 'Usage:'
-      write(0,*) ' kernel_chi_sum.x nv nc ng nk nfreq'
-      write(0,*)
-      write(0,*) 'Short example (<1s):'
-      write(0,*) './kernel_chi_sum.x  4 100 100 5 15'
-      write(0,*)
-      write(0,*) 'Long example (<30s):'
-      write(0,*) './kernel_chi_sum.x  4 400 100 30 20'
-      write(0,*)
+    if (narg/=6) then
+      if (inode .eq. 0 ) then
+        write(0,*) 'Usage:'
+        write(0,*) ' kernel_chi_sum.x nv nc ng nk nfreq nodes'
+        write(0,*)
+        write(0,*) 'Short example (<1s):'
+        write(0,*) './kernel_chi_sum.x  4 1000 1000 5 15 10'
+        write(0,*)
+        write(0,*) 'Long example (<30s):'
+        write(0,*) './kernel_chi_sum.x  4 4000 1000 30 20 10'
+        write(0,*)
+        call flush(6)
+      endif
+      call MPI_BARRIER(MPI_COMM_WORLD, mpierr)
       stop
     endif
 
@@ -100,41 +120,60 @@ program chi_summation
     call getarg(2, arg)
     read(arg,*) ncond
     call getarg(3, arg)
-    read(arg,*) nprc_nmtx
+    read(arg,*) nmtx
     call getarg(4, arg)
     read(arg,*) nrk
     call getarg(5, arg)
     read(arg,*) nfreq
+    call getarg(6, arg)
+    read(arg,*) nodes
 
-    write(6,*) 'Input parameters'
-    write(6,*) '----------------'
-    write(6,666) 'number of valence bands', nval
-    write(6,666) 'number of conduction bands', ncond
-    write(6,666) 'number of gvectors in polarizability', nprc_nmtx
-    write(6,666) 'number of kpoints', nrk
-    write(6,666) 'number of frequencies', nfreq
+    if( inode .eq. 0 ) then
+      write(6,*) 'Input parameters'
+      write(6,*) '----------------'
+      write(6,666) 'number of valence bands', nval
+      write(6,666) 'number of conduction bands', ncond
+      write(6,666) 'number of gvectors in polarizability', nmtx
+      write(6,666) 'number of kpoints', nrk
+      write(6,666) 'number of frequencies', nfreq
+      write(6,666) 'number of nodes', nodes
+    endif
+
+    total_tasks = nodes*npes
+    sqrt_total_tasks = int(sqrt(1.0*total_tasks))
+
+    ncond = ncond / total_tasks
+    nprc_nmtx = int(nmtx / sqrt(1.0*total_tasks))
 
 !$omp parallel private(tid) shared(nthreads)
     tid = OMP_GET_THREAD_NUM()
     if (tid==0) then
       nthreads = OMP_GET_NUM_THREADS()
-      write(6,666) 'Number of threads', nthreads
+      if( inode .eq. 0) then
+        write(6,666) 'Number of threads', nthreads
+        write(6,666) 'Number of tasks', total_tasks
+        write(6,666) 'Gvectors per Task', nprc_nmtx
+      endif
     endif
 !$omp end parallel
     666 format(1x,a,' = ',i0)
-    write(6,*)
+    if( inode .eq. 0 ) then
+      write(6,*)
+    endif
 
     call timacc(0,0)
     call timacc(1,1)
 
-    write(6,*) 'Initializing default params'
+    if( inode .eq. 0 ) then
+      write(6,*) 'Initializing default params'
+    endif
+
     call timacc(2,1)
 
     os_para_freqs=1
     os_nfreq_para=nfreq
     nspin=1
-    npes=1
-    inode=1
+    !npes=1
     allocate(nst(nrk))
     nst(:)=1
 
@@ -173,12 +212,12 @@ program chi_summation
 ! the higher conduction states are more orthogonal to the valence 
 ! states than the lower ones.
 
-    allocate(gme(nprc_nmtx,ncond,nval,nspin,nrk,os_para_freqs))
+    allocate(gme(nmtx,ncond,nval,nspin,nrk,os_para_freqs))
 
     do ik=1,nrk
       do iv=1,nval
         do ic=1,ncond
-          do ig=1,nprc_nmtx
+          do ig=1,nmtx
             if( (ig-ic-iv) .eq. 0 .or. (ic-ig-iv) .eq. 0) then
               gme(ig,ic,iv,1,ik,1)=1d-1
             else
@@ -198,6 +237,7 @@ program chi_summation
 
     do ig=1,nprc_nmtx
       do ik=1,nrk
+        !indt(ig,1,ik)=mod(ig,32)+(ig/32)*sqrt_total_tasks
         indt(ig,1,ik)=ig
         pht(ig,1,ik) = cmplx(1d0,0d0)
       enddo
@@ -233,7 +273,7 @@ program chi_summation
 
     grp_mtxel_start=inode !for non-parallel freq case
 
-    do ipe = 1, npes
+    do ipe = 1, total_tasks
 
       call timacc(6,1)
       allocate(gmeRDyntempr2(nprc_nmtx,ntot,os_nfreq_para))
@@ -433,17 +473,19 @@ program chi_summation
     ! ---------------------------------------------------------------------------
 
     call timacc(7,1)
-    write(6,*)
-    write(6,*) 'Summary of resulting matrix:'
-    write(6,*) '----------------------------'
-    write(6,*) 'Sum(chi0R(omega=0)) = ', sum(chiRDyn(1,:,:,1))
-    write(6,*) 'Sum(|real(chi0R(omega=0))|) = ', sum(abs(dble(chiRDyn(1,:,:,1))))
-    write(6,*) 'Sum(|imag(chi0R(omega=0))|) = ', sum(abs(aimag(chiRDyn(1,:,:,1))))
-    write(6,*) 'Norm2(real(chi0R(omega=0))+imag(chi0R(omega=0))) = ',norm2(dble(chiRDyn(1,:,:,1))+aimag(chiRDyn(1,:,:,1)))
-    write(6,*) 'chi0R(1:2,1:2)(omega=0) = '
-    tmp = chiRDyn(1,1:2,1:2,1)
-    write(6,*) tmp
-    write(6,*)
+    if( inode .eq. 0) then
+      write(6,*)
+      write(6,*) 'Summary of resulting matrix:'
+      write(6,*) '----------------------------'
+      write(6,*) 'Sum(chi0R(omega=0)) = ', sum(chiRDyn(1,:,:,1))
+      write(6,*) 'Sum(|real(chi0R(omega=0))|) = ', sum(abs(dble(chiRDyn(1,:,:,1))))
+      write(6,*) 'Sum(|imag(chi0R(omega=0))|) = ', sum(abs(aimag(chiRDyn(1,:,:,1))))
+      write(6,*) 'Norm2(real(chi0R(omega=0))+imag(chi0R(omega=0))) = ',norm2(dble(chiRDyn(1,:,:,1))+aimag(chiRDyn(1,:,:,1)))
+      write(6,*) 'chi0R(1:2,1:2)(omega=0) = '
+      tmp = chiRDyn(1,1:2,1:2,1)
+      write(6,*) tmp
+      write(6,*)
+    endif
     call timacc(7,2)
 
     deallocate(chiRDyn)
@@ -465,20 +507,25 @@ program chi_summation
     routsrt=(/ 2, 3, 4,5, 6, 8, 7, 1 /)
 
     call timacc(1,2)
-    write(6,*)
-    write(6,9000) 'CPU (s)','WALL (s)','#'
-    write(6,*)
-    do ii=1,ubound(routsrt, 1)
-      call timacc(routsrt(ii),3,tsec,ncount)
-      if (ii>1) then
-        if (abs(routsrt(ii)-routsrt(ii-1))>10) write(6,*)
-      endif
-      write(6,9001) routnam(routsrt(ii)),tsec(1)/nthreads,tsec(2),ncount
-    enddo
-    write(6,*)
+    if( inode .eq. 0) then
+      write(6,*)
+      write(6,9000) 'CPU (s)','WALL (s)','#'
+      write(6,*)
+      do ii=1,ubound(routsrt, 1)
+        call timacc(routsrt(ii),3,tsec,ncount)
+        if (ii>1) then
+          if (abs(routsrt(ii)-routsrt(ii-1))>10) write(6,*)
+        endif
+        write(6,9001) routnam(routsrt(ii)),tsec(1)/nthreads,tsec(2),ncount
+      enddo
+      write(6,*)
+    endif
 
     deallocate(routnam)
     deallocate(routsrt)
+
+    call flush(6)
+    call MPI_Barrier(MPI_COMM_WORLD, mpierr)
 
 9000 format(22x,a13,  3x,a13,  3x,a8)
 9001 format(1x,a16,5x,f13.3,3x,f13.3,3x,i8)
