@@ -49,20 +49,25 @@ contains
 
   subroutine timget(cpu,wall)
     real(DP), intent(out) :: cpu,wall
-    
-    integer :: values(8)
+    integer :: icount,irate
+    real(DP), save :: invrate = 0d0
+!    integer :: values(8)
 
     ! no push_sub, called too frequently
-
-!XXX
-!intel
-!    cpu=mclock()*1.0d-3
-!cray
-    call cpu_time(cpu)
-
-    call date_and_time(VALUES=values)
-    wall=((values(3)*24.0d0+values(5))*60.0d0 &
-      +values(6))*60.0d0+values(7)+values(8)*1.0d-3
+!#ifdef DEBUG
+!    call cpu_time(cpu)
+!    call date_and_time(VALUES=values)
+!    wall=((values(3)*24.0d0+values(5))*60.0d0 &
+!      +values(6))*60.0d0+values(7)+values(8)*1.0d-3
+!#else
+    if (invrate==0d0) then
+      call system_clock(count_rate=irate)
+      invrate = 1d0/irate
+    endif
+    call system_clock(count=icount)
+    cpu = icount* invrate
+    wall  = cpu
+!#endif
 
     return
   end subroutine timget
