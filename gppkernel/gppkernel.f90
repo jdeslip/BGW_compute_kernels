@@ -46,6 +46,7 @@ program gppkernel
       real(kind(1.0d0)) :: time_stat
       real(kind(1.0d0)) :: starttime_dyn, endtime_dyn
       real(kind(1.0d0)) :: time_dyn
+!DIR$ attributes fastmem :: I_eps_array, wtilde_array, aqsmtemp, aqsntemp, ssx_array, sch_array, vcoul, ssxa, scha, acht_n1_loc, asxtemp, achtemp
       logical :: flag_occ
       CHARACTER(len=32) :: arg
       integer npes,mype,ierr
@@ -85,20 +86,22 @@ program gppkernel
         READ(arg,*) ggpsum
       endif
 
-      ! ngpown is number of gvectors per mpi task
-      ngpown = ncouls / ( nodes_per_group * npes )
-      
       call mpi_bcast(number_bands,1,mpi_integer,0,mpi_comm_world,ierr)
       call mpi_bcast(nvband,      1,mpi_integer,0,mpi_comm_world,ierr)
       call mpi_bcast(ncouls,      1,mpi_integer,0,mpi_comm_world,ierr)
       call mpi_bcast(ngpown,      1,mpi_integer,0,mpi_comm_world,ierr)
+      call mpi_bcast(nodes_per_group,      1,mpi_integer,0,mpi_comm_world,ierr)
+      call mpi_bcast(ggpsum,      1,mpi_integer,0,mpi_comm_world,ierr)
+
+      ! ngpown is number of gvectors per mpi task
+      ngpown = ncouls / ( nodes_per_group * npes )
       
       e_lk = 10D0
       dw = 1D0
       nstart = 1
       nend = 3
 
-      if(mype==0)then
+      if(mype==1)then
         write(6,*) "number_bands = ",number_bands
         write(6,*) "nvband = ",nvband
         write(6,*) "ncouls = igmax = ",ncouls
@@ -260,15 +263,15 @@ program gppkernel
 
 ! JRD: This Loop is Performance critical. Make Sure you don`t mess it up
 
-!$OMP PARALLEL private (my_igp,igp,indigp,igmax,mygpvar1,mygpvar2,ssx_array,sch_array,ig, &
-!$OMP                      wtilde,wtilde2,halfinvwtilde,ssxcutoff,matngmatmgp,matngpmatmg,sch,ssx, &
-!$OMP                      iw,delw,delw2,Omega2,scht,ssxt,wxt, &
-!$OMP                      rden,cden,ssxa,scha,delwr,wdiffr,occfact,igend,igbeg)
-
         ALLOCATE(ssx_array(3))
         ALLOCATE(sch_array(3))
         ALLOCATE(ssxa(ncouls))
         ALLOCATE(scha(ncouls))
+
+!$OMP PARALLEL private (my_igp,igp,indigp,igmax,mygpvar1,mygpvar2,ssx_array,sch_array,ig, &
+!$OMP                      wtilde,wtilde2,halfinvwtilde,ssxcutoff,matngmatmgp,matngpmatmg,sch,ssx, &
+!$OMP                      iw,delw,delw2,Omega2,scht,ssxt,wxt, &
+!$OMP                      rden,cden,ssxa,scha,delwr,wdiffr,occfact,igend,igbeg)
 
 !$OMP DO reduction(+:asxtemp,acht_n1_loc,achtemp) schedule(dynamic)
         do my_igp = 1, ngpown
@@ -513,12 +516,12 @@ program gppkernel
         enddo ! igp
 !$OMP END DO
 
+!$OMP END PARALLEL
+
         DEALLOCATE(ssx_array)
         DEALLOCATE(sch_array)
         DEALLOCATE(ssxa)
         DEALLOCATE(scha)
-
-!$OMP END PARALLEL
 
         call timget(endtime_dyn)
         time_dyn = time_dyn + endtime_dyn - starttime_dyn
